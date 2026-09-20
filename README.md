@@ -4,7 +4,7 @@ A music player
 
 ## 构建
 
-JDK 17+，Android SDK。
+JDK 17+
 
 ```bat
 .\gradlew.bat :app:assembleDebug
