@@ -49,7 +49,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
@@ -70,7 +69,6 @@ import app.hypochlorite.Route
 import app.hypochlorite.netease.LyricLine
 import app.hypochlorite.player.Lyrics
 import app.hypochlorite.ui.AudioWaveLine
-import app.hypochlorite.ui.Cover
 import app.hypochlorite.ui.CoverAnchor
 import app.hypochlorite.ui.CoverBlurBackdrop
 import app.hypochlorite.ui.CoverUrls
@@ -365,21 +363,17 @@ internal fun NowPlayingScreen(state: HomeState, vm: HypochloriteViewModel) {
                 animationSpec = tween(320, easing = CubicBezierEasing(0.1f, 0.9f, 0.2f, 1f)),
                 label = "lyricsCover",
             )
-            val coverUrl = song?.cover?.takeIf { it.isNotEmpty() } ?: state.backdropCoverUrl
-            // 淡出途中尽早卸掉 KineticCoverFrame（脉冲 / 角标动画很重），改用静态 Cover 撑住淡出；
-            // 进度回到接近 0 再挂回 Kinetic，切回封面后切歌动画仍可用。
-            val useKineticCover = lyricsProgress < 0.12f
+            // 封面一直留在组合里：在歌词页切歌时完整动画仍在跑，切回封面才不会只剩后半段。
+            // 不卸 KineticCoverFrame、不加 Offscreen：1126d7f 的互换/离屏合成在部分机型打开详情会崩。
             // 歌词 LazyColumn 首帧 scrollToItem 很贵：晚一点再挂，且等淡入近结束才允许跟滚。
             val mountFullLyrics = showLyrics || lyricsProgress > 0.25f
             val lyricsScrollReady = lyricsProgress >= 0.95f
-            // 封面层始终留在组合树里（静态 Cover 很轻）：歌词页切歌时 URL 仍更新，切回不闪空。
             Column(
                 Modifier
                     .align(Alignment.Center)
                     .zIndex(if (lyricsProgress < 0.5f) 1f else 0f)
                     .fillMaxWidth()
                     .graphicsLayer {
-                        compositingStrategy = CompositingStrategy.Offscreen
                         alpha = 1f - lyricsProgress
                         val scale = 1f - 0.05f * lyricsProgress
                         scaleX = scale
@@ -411,40 +405,26 @@ internal fun NowPlayingScreen(state: HomeState, vm: HypochloriteViewModel) {
                         }
                         val isAudioReady = (state.player.current?.id == song?.id) &&
                             (state.player.playable != null || state.player.playing || state.player.error != null)
-                        val coverModifier = Modifier.size(200.dp)
-                        if (useKineticCover) {
-                            KineticCoverFrame(
-                                coverUrl = coverUrl,
-                                songId = song?.id,
-                                direction = state.songTransitionDir,
-                                transitionSeq = state.songTransitionSeq,
-                                accentColor = state.palette.banner,
-                                playSecondHalfOnEnter = true,
-                                isAudioReady = isAudioReady,
-                                modifier = coverModifier
-                                    .then(
-                                        if (hasLyrics) {
-                                            Modifier.clickableNoRipple { showFullLyrics = true }
-                                        } else {
-                                            Modifier
-                                        },
-                                    )
-                                    .coverPulse(coverPulseScale)
-                                    .reportPrimaryCoverAnchor(),
-                            )
-                        } else {
-                            Cover(
-                                url = coverUrl,
-                                modifier = coverModifier.then(
-                                    if (lyricsProgress < 0.5f) {
-                                        Modifier.reportPrimaryCoverAnchor()
+                        KineticCoverFrame(
+                            coverUrl = song?.cover?.takeIf { it.isNotEmpty() } ?: state.backdropCoverUrl,
+                            songId = song?.id,
+                            direction = state.songTransitionDir,
+                            transitionSeq = state.songTransitionSeq,
+                            accentColor = state.palette.banner,
+                            playSecondHalfOnEnter = true,
+                            isAudioReady = isAudioReady,
+                            modifier = Modifier
+                                .size(200.dp)
+                                .then(
+                                    if (hasLyrics && lyricsProgress <= 0.02f) {
+                                        Modifier.clickableNoRipple { showFullLyrics = true }
                                     } else {
                                         Modifier
                                     },
-                                ),
-                                px = CoverUrls.HERO_PX,
-                            )
-                        }
+                                )
+                                .coverPulse(coverPulseScale)
+                                .reportPrimaryCoverAnchor(),
+                        )
                         Box(
                             Modifier
                                 .weight(1f)
@@ -488,7 +468,6 @@ internal fun NowPlayingScreen(state: HomeState, vm: HypochloriteViewModel) {
                         .fillMaxSize()
                         .zIndex(if (lyricsProgress >= 0.5f) 1f else 0f)
                         .graphicsLayer {
-                            compositingStrategy = CompositingStrategy.Offscreen
                             alpha = lyricsProgress
                             translationY = 16.dp.toPx() * (1f - lyricsProgress)
                             val scale = 0.96f + 0.04f * lyricsProgress
