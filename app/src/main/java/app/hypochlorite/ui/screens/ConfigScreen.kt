@@ -83,14 +83,6 @@ internal fun ConfigScreen(state: HomeState, vm: HypochloriteViewModel) {
             modifier = Modifier.padding(top = 20.dp),
             on = state.monetEnabled,
         )
-        if (state.monetEnabled) {
-            MonoText(
-                if (state.palette.seed == null) "还没放过歌，放一首就有了。"
-                else "背景 ${state.palette.background.hex()} · 封面色 ${argbHex(state.palette.seed)} · 封面虚化铺底",
-                muted = true,
-                modifier = Modifier.padding(top = 8.dp),
-            )
-        }
         HoverBold(
             if (state.revealEnabled) "> 切歌扩散动画  开" else "- 切歌扩散动画  关",
             onClick = { vm.setRevealEnabled(!state.revealEnabled) },

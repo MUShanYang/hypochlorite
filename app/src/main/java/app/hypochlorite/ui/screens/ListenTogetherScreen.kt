@@ -88,24 +88,11 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
         if (room == null && seated) {
             MonoText("一起听已经结束了", modifier = Modifier.padding(top = 20.dp))
         } else if (room == null) {
-            MonoText("和朋友听同一首、同一刻", modifier = Modifier.padding(top = 20.dp), bold = true, size = 20)
             if (!state.loggedIn) {
-                MonoText(
-                    "一起听要挂在你的网易云账号上，先去登录。",
-                    color = Warn,
-                    size = 13,
-                    modifier = Modifier.padding(top = 16.dp),
-                )
                 HoverBold("账号登录", onClick = { vm.openLogin() }, modifier = Modifier.padding(top = 10.dp))
             } else {
                 MonoText("创建房间", modifier = Modifier.padding(top = 28.dp))
                 Hairline(Modifier.padding(top = 8.dp))
-                MonoText(
-                    "双人房两个人。多人房可以再进几位，但得先有正在放的歌。",
-                    muted = true,
-                    size = 13,
-                    modifier = Modifier.padding(top = 10.dp),
-                )
                 Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     HoverBold(
                         if (kind.value == ListenRoomKind.Duo) "> 双人" else "- 双人",
@@ -129,12 +116,6 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
 
                 MonoText("加入房间", modifier = Modifier.padding(top = 28.dp))
                 Hairline(Modifier.padding(top = 8.dp))
-                MonoText(
-                    "贴朋友发来的邀请链接，或者扫邀请二维码。房间号和邀请人中间留个空格也行。",
-                    muted = true,
-                    size = 13,
-                    modifier = Modifier.padding(top = 10.dp),
-                )
                 UnderlineField(
                     value = state.listenInput,
                     onValueChange = { vm.setListenInput(it) },
@@ -150,7 +131,7 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
                             val options = ScanOptions().apply {
                                 setBeepEnabled(false)
                                 setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                                setPrompt("把一起听的邀请二维码放进来")
+                                setPrompt("扫描邀请二维码")
                             }
                             runCatching { scanLauncher.launch(options) }.onFailure {
                                 vm.listenNote("这台机器开不了相机，改贴链接吧")
@@ -191,7 +172,7 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
                 Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                     HoverBold(
                         "复制邀请链接",
-                        onClick = { vm.copyText(shareUrl, "链接复制好了，用网易云打开就能进") },
+                        onClick = { vm.copyText(shareUrl, "已复制") },
                         padV = 9,
                     )
                     HoverBold(
@@ -212,12 +193,6 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
                 }
                 val inviteQr = qr
                 if (inviteQr != null) {
-                    MonoText(
-                        "对方用网易云扫这个码也能进来。",
-                        muted = true,
-                        size = 12,
-                        modifier = Modifier.padding(top = 16.dp),
-                    )
                     Image(
                         bitmap = inviteQr,
                         contentDescription = "一起听邀请",
@@ -226,33 +201,11 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
                             .size(168.dp),
                     )
                 }
-                if (lt.hosting && room.users.size <= 1) {
-                    MonoText(
-                        "人齐了就会听到你正在放的歌。",
-                        muted = true,
-                        size = 13,
-                        modifier = Modifier.padding(top = 12.dp),
-                    )
-                } else if (!lt.hosting && lt.link != ListenLink.Live) {
-                    MonoText(
-                        "正在对齐房间里的进度。",
-                        muted = true,
-                        size = 13,
-                        modifier = Modifier.padding(top = 12.dp),
-                    )
-                }
             }
 
             MonoText("一起听的人 ${room.memberCount}", modifier = Modifier.padding(top = 28.dp))
             Hairline(Modifier.padding(top = 8.dp))
-            if (room.users.isEmpty()) {
-                MonoText(
-                    "房间里暂时只有你。把链接发出去，等人进来。",
-                    muted = true,
-                    size = 13,
-                    modifier = Modifier.padding(top = 10.dp),
-                )
-            } else {
+            if (room.users.isNotEmpty()) {
                 room.users.forEach { u ->
                     val me = u.userId == state.profileUserId
                     Row(
@@ -280,12 +233,6 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
                 muted = true,
                 size = 13,
                 modifier = Modifier.padding(top = 10.dp),
-            )
-            MonoText(
-                "加歌、删歌、调顺序都会同步过去。",
-                muted = true,
-                size = 12,
-                modifier = Modifier.padding(top = 4.dp),
             )
             lt.roomQueue.take(30).forEachIndexed { i, song ->
                 val nowPlaying = state.player.current?.id == song.id
@@ -321,14 +268,7 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
                     modifier = Modifier.padding(top = 6.dp),
                 )
             }
-            if (lt.roomQueue.isEmpty()) {
-                MonoText(
-                    "还没歌。在任意列表里点一首就会同步过去，长按只加不放。",
-                    muted = true,
-                    size = 12,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-            }
+            
 
             lt.error?.takeIf { it.isNotEmpty() }?.let { message ->
                 MonoText(message, color = Warn, size = 13, modifier = Modifier.padding(top = 20.dp))
@@ -341,12 +281,6 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
                 onClick = { vm.listenLeaveRoom() },
                 color = Warn,
                 modifier = Modifier.padding(top = 10.dp),
-            )
-            MonoText(
-                if (lt.hosting) "你是房主。结束后房间会散，其他人也会断开。" else "离开只影响你自己，房间还在。",
-                muted = true,
-                size = 12,
-                modifier = Modifier.padding(top = 6.dp),
             )
         }
 
