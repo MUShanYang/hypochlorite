@@ -209,7 +209,7 @@ private fun PlaylistFlow(items: List<Playlist>, loading: Boolean, loggedIn: Bool
             item {
                 val hint = when {
                     loading -> "正在同步歌单…"
-                    !loggedIn -> "未登录，右上角设置里可登录账号"
+                    !loggedIn -> "未登录"
                     else -> "歌单为空，点右上角搜索图标添加歌曲"
                 }
                 MonoText(hint, muted = true, modifier = Modifier.padding(top = 12.dp))

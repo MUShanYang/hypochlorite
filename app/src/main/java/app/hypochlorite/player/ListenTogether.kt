@@ -477,12 +477,22 @@ class ListenTogether(
         _state.update { state ->
             val current = state.room ?: return@update state
             if (current.roomId != room.roomId) return@update state
+            val nextUsers = members?.map { person ->
+                RoomUser(person.userId.toString(), person.nickname, person.avatarUrl.orEmpty())
+            }
+            if (nextUsers == null) {
+                if (state.connected && state.link == ListenLink.Live && state.error == null) return@update state
+                return@update state.copy(connected = true, link = ListenLink.Live, error = null)
+            }
+            if (nextUsers == current.users &&
+                state.connected &&
+                state.link == ListenLink.Live &&
+                state.error == null
+            ) {
+                return@update state
+            }
             state.copy(
-                room = if (members == null) current else current.copy(
-                    users = members.map { person ->
-                        RoomUser(person.userId.toString(), person.nickname, person.avatarUrl.orEmpty())
-                    },
-                ),
+                room = current.copy(users = nextUsers),
                 connected = true,
                 link = ListenLink.Live,
                 error = null,
@@ -670,11 +680,13 @@ class ListenTogether(
     private fun observeQueue() {
         scope.launch {
             player.state
-                .map { snap -> snap.queue to queueIds(snap.queue) }
-                .distinctUntilChanged()
-                .collect { (queue, ids) ->
+                .map { it.queue }
+                .distinctUntilChanged { old, new -> old === new }
+                .collect { queue ->
+                    val ids = queueIds(queue)
                     _state.update { state ->
-                        if (state.room == null) state else state.copy(roomQueue = queue)
+                        if (state.room == null || state.roomQueue === queue) state
+                        else state.copy(roomQueue = queue)
                     }
                     queueReportJob?.cancel()
                     if (!listenQueueNeedsSync(_state.value.room != null, ids, lastReportedIds)) return@collect

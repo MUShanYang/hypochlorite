@@ -22,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -169,7 +170,10 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
             }
         } else {
             val shareUrl = Crypto.ltShareUrl(room.roomId, state.player.current?.id, room.inviterId ?: state.profileUserId)
-            val qr = remember(shareUrl) { runCatching { vm.inviteQr(shareUrl) }.getOrNull() }
+            var qr by remember(shareUrl) { mutableStateOf<ImageBitmap?>(null) }
+            LaunchedEffect(shareUrl) {
+                qr = vm.inviteQr(shareUrl)
+            }
             Column(Modifier.padding(top = 20.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     MonoText(if (lt.hosting) "[房主]" else "[成员]", bold = true, size = 16)
@@ -206,7 +210,8 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
                         padV = 9,
                     )
                 }
-                if (qr != null) {
+                val inviteQr = qr
+                if (inviteQr != null) {
                     MonoText(
                         "对方用网易云扫这个码也能进来。",
                         muted = true,
@@ -214,7 +219,7 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
                         modifier = Modifier.padding(top = 16.dp),
                     )
                     Image(
-                        bitmap = qr,
+                        bitmap = inviteQr,
                         contentDescription = "一起听邀请",
                         modifier = Modifier
                             .padding(top = 8.dp)

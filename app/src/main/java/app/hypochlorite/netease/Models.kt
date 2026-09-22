@@ -1,5 +1,8 @@
 package app.hypochlorite.netease
 
+import androidx.compose.runtime.Immutable
+
+@Immutable
 data class Song(
     val id: String,
     val name: String,
@@ -15,6 +18,7 @@ data class Song(
     }
 }
 
+@Immutable
 data class Album(
     val id: String,
     val name: String,
@@ -31,6 +35,7 @@ data class Album(
  *
  * cloudsearch 的歌手对象不带粉丝数，综合页只展示曲目数和专辑数。
  */
+@Immutable
 data class Artist(
     val id: String,
     val name: String,
@@ -40,6 +45,7 @@ data class Artist(
     val albumSize: Int = 0,
 )
 
+@Immutable
 data class Playlist(
     val id: String,
     val name: String,
@@ -79,12 +85,14 @@ data class Playable(
     val bitDepth: Int? = null,
 )
 
+@Immutable
 data class LyricLine(
     val timeMs: Long,
     val text: String,
 )
 
 /** 一起听房间里的一个成员 */
+@Immutable
 data class RoomUser(
     val userId: String,
     val nickname: String = "",
@@ -97,6 +105,7 @@ data class RoomUser(
  * [roomId] 是不透明的房间号。[inviterId] 是邀请链接上的那个人，一般就是房主。
  * [ownerId] 用来在成员列表里标出房主。
  */
+@Immutable
 data class RoomInfo(
     val roomId: String,
     val ownerId: String? = null,

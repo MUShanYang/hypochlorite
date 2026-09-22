@@ -25,12 +25,17 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -89,6 +94,11 @@ internal fun SearchSurface(
     val pager = rememberPagerState(initialPage = 0, pageCount = { SearchTab.entries.size })
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
+    // 页签跟着滑动落点走。只读 currentPage 时，父组合不一定会因翻页重算，顶栏会停在旧页。
+    var selectedTab by remember { mutableIntStateOf(pager.currentPage) }
+    LaunchedEffect(pager) {
+        snapshotFlow { pager.targetPage }.collect { page -> selectedTab = page }
+    }
 
     LaunchedEffect(Unit) {
         delay(32)
@@ -109,8 +119,11 @@ internal fun SearchSurface(
         )
         Hairline(Modifier.padding(horizontal = 14.dp))
         SearchTabs(
-            selected = pager.currentPage,
-            onSelect = { page -> scope.launch { pager.animateScrollToPage(page) } },
+            selected = selectedTab,
+            onSelect = { page ->
+                selectedTab = page
+                scope.launch { pager.animateScrollToPage(page) }
+            },
         )
         HorizontalPager(
             state = pager,
@@ -118,6 +131,7 @@ internal fun SearchSurface(
         ) { page ->
             when (SearchTab.entries[page]) {
                 SearchTab.All -> Comprehensive(state, vm) { tab ->
+                    selectedTab = tab.ordinal
                     scope.launch { pager.animateScrollToPage(tab.ordinal) }
                 }
                 SearchTab.Songs -> SongResults(state, vm)
@@ -178,10 +192,15 @@ private fun SearchHeader(
 @Composable
 private fun SearchTabs(selected: Int, onSelect: (Int) -> Unit) {
     val colors = LocalHypochloriteColors.current
+    val scroll = rememberScrollState()
+    val intoView = remember { List(SearchLabels.size) { BringIntoViewRequester() } }
+    LaunchedEffect(selected) {
+        intoView.getOrNull(selected)?.bringIntoView()
+    }
     Row(
         Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
+            .horizontalScroll(scroll)
             .padding(horizontal = 14.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -191,6 +210,7 @@ private fun SearchTabs(selected: Int, onSelect: (Int) -> Unit) {
                 onClick = { onSelect(index) },
                 color = if (index == selected) colors.text else colors.muted,
                 on = index == selected,
+                modifier = Modifier.bringIntoViewRequester(intoView[index]),
             )
         }
     }
@@ -211,6 +231,21 @@ private fun Comprehensive(
         albums.items.isNotEmpty() || artists.items.isNotEmpty()
     val anyFailed = songs.failed || playlists.failed || albums.failed || artists.failed
     val query = state.searchQuery.trim()
+    val currentId = state.player.current?.id
+    val featuredArtist = remember(artists.items) { artists.items.firstOrNull() }
+    val featuredAlbum = remember(featuredArtist, albums.items) {
+        if (featuredArtist == null) albums.items.firstOrNull() else null
+    }
+    val albumRest = remember(featuredAlbum, albums.items) {
+        if (featuredAlbum != null) albums.items.drop(1) else albums.items
+    }
+    val artistRest = remember(featuredArtist, artists.items) {
+        if (featuredArtist != null) artists.items.drop(1) else artists.items
+    }
+    val songPreview = remember(songs.items) { songs.items.take(PREVIEW_SONGS) }
+    val playlistPreview = remember(playlists.items) { playlists.items.take(PREVIEW_REST) }
+    val albumPreview = remember(albumRest) { albumRest.take(PREVIEW_REST) }
+    val artistPreview = remember(artistRest) { artistRest.take(PREVIEW_REST) }
     ResultColumn(
         state = state,
         hasItems = hasItems,
@@ -218,14 +253,6 @@ private fun Comprehensive(
         emptyText = "没有结果",
         onRetry = vm::search,
     ) {
-        val featuredArtist = artists.items.firstOrNull()
-        val featuredAlbum = if (featuredArtist == null) albums.items.firstOrNull() else null
-        val albumRest = if (featuredAlbum != null) albums.items.drop(1) else albums.items
-        val artistRest = if (featuredArtist != null) artists.items.drop(1) else artists.items
-        val songPreview = songs.items.take(PREVIEW_SONGS)
-        val playlistPreview = playlists.items.take(PREVIEW_REST)
-        val albumPreview = albumRest.take(PREVIEW_REST)
-        val artistPreview = artistRest.take(PREVIEW_REST)
 
         if (featuredArtist != null) {
             item(key = "feature-artist-${featuredArtist.id}") {
@@ -276,7 +303,7 @@ private fun Comprehensive(
                     song = song,
                     onClick = { vm.playAll(songs.items, i) },
                     onLongPress = { vm.listenPushSong(song) },
-                    on = state.player.current?.id == song.id,
+                    on = currentId == song.id,
                     isLiked = state.likedSongIds.contains(song.id),
                     index = i,
                     highlight = query,
@@ -373,6 +400,7 @@ private fun Comprehensive(
 private fun SongResults(state: HomeState, vm: HypochloriteViewModel) {
     val songs = state.search.songs
     val query = state.searchQuery.trim()
+    val currentId = state.player.current?.id
     ResultColumn(
         state = state,
         hasItems = songs.items.isNotEmpty(),
@@ -391,7 +419,7 @@ private fun SongResults(state: HomeState, vm: HypochloriteViewModel) {
                 song = song,
                 onClick = { vm.playAll(songs.items, i) },
                 onLongPress = { vm.listenPushSong(song) },
-                on = state.player.current?.id == song.id,
+                on = currentId == song.id,
                 isLiked = state.likedSongIds.contains(song.id),
                 index = i,
                 highlight = query,

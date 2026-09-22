@@ -27,7 +27,10 @@ import app.hypochlorite.netease.Song
 import app.hypochlorite.netease.parseListenInvite
 import app.hypochlorite.player.ListenTogetherState
 import app.hypochlorite.player.PlaybackService
+import app.hypochlorite.player.PlayerClock
 import app.hypochlorite.player.PlayerSnapshot
+import app.hypochlorite.player.clock
+import app.hypochlorite.player.sameUiAs
 import app.hypochlorite.player.audioOutputs
 import app.hypochlorite.player.hasUsbAudioHost
 import app.hypochlorite.player.isUsb
@@ -355,8 +358,6 @@ data class HomeState(
     val willResample: Boolean = false,
     /** 正在出声的那只设备名（可能不是 USB，比如没开独占时的扬声器） */
     val activeDeviceName: String? = null,
-    /** DJ 自动接歌：两首歌之间自动对速、按调性接过去 */
-    val djMix: Boolean = false,
 )
 
 class HypochloriteViewModel(application: Application) : AndroidViewModel(application) {
@@ -364,6 +365,10 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
 
     private val _ui = MutableStateFlow(HomeState())
     val ui: StateFlow<HomeState> = _ui
+
+    /** 走针 / 歌词下标。进度条和底栏副标题读这一份，别的页面不要订。 */
+    private val _clock = MutableStateFlow(PlayerClock())
+    val clock: StateFlow<PlayerClock> = _clock
 
     private var qrPoll: Job? = null
     private var qrKey: String? = null
@@ -406,7 +411,15 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
             var lastTrackId: String? = null
             var lastTrackIndex = -1
             app.player.state.collect { snap ->
-                _ui.update { it.copy(player = snap) }
+                val nextClock = snap.clock()
+                if (_clock.value != nextClock) _clock.value = nextClock
+
+                val prevPlayer = _ui.value.player
+                val uiChanged = !prevPlayer.sameUiAs(snap)
+                if (uiChanged) {
+                    _ui.update { it.copy(player = snap) }
+                }
+
                 if (snap.playing && !wasPlaying) {
                     startPlaybackService()
                 }
@@ -424,10 +437,16 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
                     lastTrackId = curSong.id
                     lastTrackIndex = snap.index
                     onSongChanged(curSong, dir, manual)
+                    prefetchNextSeed()
+                    refreshResampleVerdict()
+                } else if (uiChanged) {
+                    if (prevPlayer.index != snap.index || prevPlayer.queue !== snap.queue) {
+                        prefetchNextSeed()
+                    }
+                    if (prevPlayer.playable != snap.playable) {
+                        refreshResampleVerdict()
+                    }
                 }
-                prefetchNextSeed()
-                // 换歌 / 换档位会换掉音源采样率，重采样结论要跟着更新
-                refreshResampleVerdict()
             }
         }
         viewModelScope.launch {
@@ -448,13 +467,6 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
         }
         initAudioOut()
         watchUsbDevices()
-        _ui.update { it.copy(djMix = app.player.djMixEnabled()) }
-    }
-
-    /** DJ 自动接歌开关：即时生效 + 落盘（播放器内部处理） */
-    fun setDjMix(on: Boolean) {
-        runCatching { app.player.setDjMix(on) }
-        _ui.update { it.copy(djMix = on) }
     }
 
     // ---------------------------------------------------------------- HiFi 音频输出
@@ -1119,7 +1131,9 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
     fun audioLevel(): Float = app.player.audioLevel()
 
     fun seekFraction(f: Float) {
-        val dur = _ui.value.player.durationMs
+        val dur = _clock.value.durationMs.takeIf { it > 0 }
+            ?: _ui.value.player.current?.durationMs
+            ?: 0L
         if (dur > 0) seekMs((dur * f).toLong())
     }
 
@@ -1553,12 +1567,20 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
     private fun refreshResampleVerdict() = runCatching {
         val v = app.player.resampleVerdict()
         _ui.update {
-            it.copy(
-                sourceSampleRate = v.sourceRate,
-                nativeSampleRate = v.nativeRate,
-                supportedRates = v.supportedRates,
-                willResample = v.willResample,
-            )
+            if (it.sourceSampleRate == v.sourceRate &&
+                it.nativeSampleRate == v.nativeRate &&
+                it.supportedRates == v.supportedRates &&
+                it.willResample == v.willResample
+            ) {
+                it
+            } else {
+                it.copy(
+                    sourceSampleRate = v.sourceRate,
+                    nativeSampleRate = v.nativeRate,
+                    supportedRates = v.supportedRates,
+                    willResample = v.willResample,
+                )
+            }
         }
     }
 
@@ -1864,7 +1886,9 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
-    fun inviteQr(text: String): ImageBitmap = makeQr(text)
+    suspend fun inviteQr(text: String): ImageBitmap? = withContext(Dispatchers.Default) {
+        runCatching { makeQr(text) }.getOrNull()
+    }
 
     private fun makeQr(text: String, size: Int = 168): ImageBitmap {
         val writer = QRCodeWriter()
@@ -1875,12 +1899,15 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
             size,
             mapOf(EncodeHintType.MARGIN to 1, EncodeHintType.CHARACTER_SET to "UTF-8"),
         )
-        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        for (x in 0 until size) {
-            for (y in 0 until size) {
-                bmp.setPixel(x, y, if (matrix[x, y]) 0xFF111111.toInt() else 0xFFFFFFFF.toInt())
+        val pixels = IntArray(size * size)
+        var i = 0
+        for (y in 0 until size) {
+            for (x in 0 until size) {
+                pixels[i++] = if (matrix[x, y]) 0xFF111111.toInt() else 0xFFFFFFFF.toInt()
             }
         }
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        bmp.setPixels(pixels, 0, size, 0, 0, size, size)
         return bmp.asImageBitmap()
     }
 }

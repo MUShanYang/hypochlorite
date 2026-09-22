@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.hypochlorite.HomeState
 import app.hypochlorite.HypochloriteViewModel
+import app.hypochlorite.netease.LyricLine
 import app.hypochlorite.ui.KineticCoverFrame
 import app.hypochlorite.ui.MiniIconButton
 import app.hypochlorite.ui.MonoText
@@ -50,6 +51,8 @@ import app.hypochlorite.ui.PauseIcon
 import app.hypochlorite.ui.PlayIcon
 import app.hypochlorite.ui.RoamChevrons
 import app.hypochlorite.ui.StaggerIn
+import app.hypochlorite.ui.lyricIndex
+import app.hypochlorite.ui.playerClock
 import app.hypochlorite.ui.reportMiniCoverAnchor
 import app.hypochlorite.ui.theme.BodyStyle
 import app.hypochlorite.ui.theme.HeavyBold
@@ -62,11 +65,7 @@ import kotlin.math.abs
 @Composable
 internal fun MiniBar(state: HomeState, vm: HypochloriteViewModel) {
     val song = state.player.current
-    val lyric = state.player.lyricLines.getOrNull(state.player.lyricIndex)?.text.orEmpty()
     val artist = song?.artists?.joinToString(" / ").orEmpty()
-    val progress = if (state.player.durationMs > 0) {
-        (state.player.positionMs.toFloat() / state.player.durationMs.toFloat()).coerceIn(0f, 1f)
-    } else 0f
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val viewConfiguration = LocalViewConfiguration.current
@@ -152,22 +151,7 @@ internal fun MiniBar(state: HomeState, vm: HypochloriteViewModel) {
     ) {
         Column(Modifier.fillMaxWidth()) {
             val colors = LocalHypochloriteColors.current
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp)
-                    .height(1.dp)
-                    .background(colors.text.copy(alpha = if (colors.isLight) 0.12f else 0.25f)),
-            ) {
-                if (progress > 0f) {
-                    Box(
-                        Modifier
-                            .fillMaxWidth(fraction = progress)
-                            .fillMaxHeight()
-                            .background(colors.text),
-                    )
-                }
-            }
+            MiniProgressTrack(vm)
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -319,29 +303,13 @@ internal fun MiniBar(state: HomeState, vm: HypochloriteViewModel) {
                                 MonoText(song?.name ?: "未在播放", maxLines = 1, marquee = true, modifier = Modifier.weight(1f, fill = false), size = 14)
                             }
                         }
-                        val sub = when {
-                            !state.player.error.isNullOrEmpty() -> state.player.error!!
-                            lyric.isNotEmpty() -> lyric
-                            artist.isNotEmpty() -> artist
-                            else -> ""
-                        }
-                        if (sub.isNotEmpty()) {
-                            // resetKey 只跟歌曲 id：副标题内容跟着歌词每句在变，不能被它反复触发入场
-                            StaggerIn(
-                                resetKey = song?.id,
-                                index = 1,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                MonoText(
-                                    sub,
-                                    maxLines = 1,
-                                    marquee = true,
-                                    muted = state.player.error.isNullOrEmpty(),
-                                    color = if (!state.player.error.isNullOrEmpty()) colors.warning else colors.muted,
-                                    size = 11,
-                                )
-                            }
-                        }
+                        MiniBarCaption(
+                            vm = vm,
+                            songId = song?.id,
+                            artist = artist,
+                            error = state.player.error,
+                            lyricLines = state.player.lyricLines,
+                        )
                     }
                 }
 
@@ -477,5 +445,65 @@ internal fun MiniBar(state: HomeState, vm: HypochloriteViewModel) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun MiniProgressTrack(vm: HypochloriteViewModel) {
+    val clock = playerClock(vm)
+    val progress = if (clock.durationMs > 0) {
+        (clock.positionMs.toFloat() / clock.durationMs.toFloat()).coerceIn(0f, 1f)
+    } else 0f
+    val colors = LocalHypochloriteColors.current
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp)
+            .height(1.dp)
+            .background(colors.text.copy(alpha = if (colors.isLight) 0.12f else 0.25f)),
+    ) {
+        if (progress > 0f) {
+            Box(
+                Modifier
+                    .fillMaxWidth(fraction = progress)
+                    .fillMaxHeight()
+                    .background(colors.text),
+            )
+        }
+    }
+}
+
+@Composable
+private fun MiniBarCaption(
+    vm: HypochloriteViewModel,
+    songId: String?,
+    artist: String,
+    error: String?,
+    lyricLines: List<LyricLine>,
+) {
+    val index = lyricIndex(vm)
+    val lyric = lyricLines.getOrNull(index)?.text.orEmpty()
+    val sub = when {
+        !error.isNullOrEmpty() -> error
+        lyric.isNotEmpty() -> lyric
+        artist.isNotEmpty() -> artist
+        else -> ""
+    }
+    if (sub.isEmpty()) return
+    val colors = LocalHypochloriteColors.current
+    // resetKey 只跟歌曲 id：副标题内容跟着歌词每句在变，不能被它反复触发入场
+    StaggerIn(
+        resetKey = songId,
+        index = 1,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        MonoText(
+            sub,
+            maxLines = 1,
+            marquee = true,
+            muted = error.isNullOrEmpty(),
+            color = if (!error.isNullOrEmpty()) colors.warning else colors.muted,
+            size = 11,
+        )
     }
 }

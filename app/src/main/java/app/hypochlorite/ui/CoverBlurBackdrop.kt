@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
@@ -57,13 +58,16 @@ fun CoverBlurBackdrop(
         modifier = modifier.clipToBounds(),
     ) { current ->
         if (current == null) return@Crossfade
+        val request = remember(current, requestPx, decodePx) {
+            ImageRequest.Builder(context)
+                .data(CoverUrls.sized(current, requestPx))
+                .size(decodePx)
+                .crossfade(false)
+                .build()
+        }
         Box(Modifier.fillMaxSize()) {
             AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(CoverUrls.sized(current, requestPx))
-                    .size(decodePx)
-                    .crossfade(false)
-                    .build(),
+                model = request,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 colorFilter = ColorFilter.colorMatrix(luma),

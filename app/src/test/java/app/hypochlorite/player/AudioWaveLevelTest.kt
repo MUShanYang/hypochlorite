@@ -11,7 +11,7 @@ import org.junit.Test
 class AudioWaveLevelTest {
     @Test
     fun meteringPreservesPcmAndFollowsLoudness() {
-        val processor = DjFxProcessor()
+        val processor = AudioLevelProcessor()
         processor.configure(AudioProcessor.AudioFormat(44100, 2, C.ENCODING_PCM_16BIT))
         processor.flush()
 
@@ -30,7 +30,7 @@ class AudioWaveLevelTest {
 
     @Test
     fun flushingClearsPreviousTrackEnergy() {
-        val processor = DjFxProcessor()
+        val processor = AudioLevelProcessor()
         processor.configure(AudioProcessor.AudioFormat(44100, 1, C.ENCODING_PCM_16BIT))
         processor.flush()
         val input = ByteBuffer.allocateDirect(512).order(ByteOrder.nativeOrder())

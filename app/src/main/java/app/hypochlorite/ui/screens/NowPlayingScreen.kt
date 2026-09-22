@@ -7,6 +7,8 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -37,6 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
@@ -53,13 +57,16 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.sp
 import coil.imageLoader
 import coil.request.ImageRequest
 import app.hypochlorite.HomeState
 import app.hypochlorite.HypochloriteViewModel
 import app.hypochlorite.Route
+import app.hypochlorite.netease.LyricLine
 import app.hypochlorite.player.Lyrics
 import app.hypochlorite.ui.AudioWaveLine
 import app.hypochlorite.ui.CoverAnchor
@@ -83,7 +90,9 @@ import app.hypochlorite.ui.VerticalLyric
 import app.hypochlorite.ui.activityOrNull
 import app.hypochlorite.ui.clickableNoRipple
 import app.hypochlorite.ui.coverPulse
+import app.hypochlorite.ui.lyricIndex
 import app.hypochlorite.ui.monetBackdrop
+import app.hypochlorite.ui.playerClock
 import app.hypochlorite.ui.rememberCoverPulse
 import app.hypochlorite.ui.rememberRevealProgress
 import app.hypochlorite.ui.reportPrimaryCoverAnchor
@@ -112,24 +121,30 @@ internal fun NowPlayingScreen(state: HomeState, vm: HypochloriteViewModel) {
     val lyricBlockHeight = with(density) { 60.sp.toDp() }
 
     val scope = rememberCoroutineScope()
-    val dragOffsetY = remember { Animatable(screenHeightPx) }
+    var offsetY by remember { mutableFloatStateOf(screenHeightPx) }
     var isDismissing by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        dragOffsetY.animateTo(
+        animate(
+            initialValue = screenHeightPx,
             targetValue = 0f,
             animationSpec = tween(320, easing = CubicBezierEasing(0.1f, 0.9f, 0.2f, 1.0f)),
-        )
+        ) { value, _ ->
+            offsetY = value
+        }
     }
 
     fun dismissCard() {
         if (isDismissing) return
         isDismissing = true
         scope.launch {
-            dragOffsetY.animateTo(
+            animate(
+                initialValue = offsetY,
                 targetValue = screenHeightPx,
                 animationSpec = tween(240, easing = FastOutLinearInEasing),
-            )
+            ) { value, _ ->
+                offsetY = value
+            }
             vm.closeNowPlaying()
         }
     }
@@ -159,13 +174,6 @@ internal fun NowPlayingScreen(state: HomeState, vm: HypochloriteViewModel) {
     }
 
     val song = state.player.current
-    val idx = state.player.lyricIndex
-    val current = state.player.lyricLines.getOrNull(idx)
-    val lyricSplit = remember(current?.text) {
-        if (current != null) Lyrics.splitLyric(current.text) else Lyrics.LyricSplit(null, null)
-    }
-    val left = idx >= 0 && idx % 2 == 0
-    val progress = if (state.player.durationMs > 0) state.player.positionMs.toFloat() / state.player.durationMs else 0f
 
     val context = LocalContext.current
     var displayedSong by remember { mutableStateOf(song) }
@@ -184,10 +192,7 @@ internal fun NowPlayingScreen(state: HomeState, vm: HypochloriteViewModel) {
 
     val draggableState = rememberDraggableState { delta ->
         if (!isDismissing) {
-            scope.launch {
-                val next = (dragOffsetY.value + delta).coerceAtLeast(0f)
-                dragOffsetY.snapTo(next)
-            }
+            offsetY = (offsetY + delta).coerceAtLeast(0f)
         }
     }
 
@@ -240,14 +245,14 @@ internal fun NowPlayingScreen(state: HomeState, vm: HypochloriteViewModel) {
         displayedSong = nextSong
     }
 
-    val dismissProgress = (dragOffsetY.value / screenHeightPx).coerceIn(0f, 1f)
-    val scrimAlpha = (1f - dismissProgress) * 0.65f
-
     Box(Modifier.fillMaxSize()) {
         Box(
             Modifier
                 .fillMaxSize()
-                .background(LocalHypochloriteColors.current.scrim.copy(alpha = scrimAlpha))
+                .drawBehind {
+                    val p = (offsetY / screenHeightPx).coerceIn(0f, 1f)
+                    drawRect(colors.scrim.copy(alpha = (1f - p) * 0.65f))
+                }
                 .clickableNoRipple { dismissCard() },
         )
 
@@ -257,28 +262,35 @@ internal fun NowPlayingScreen(state: HomeState, vm: HypochloriteViewModel) {
             Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    translationY = dragOffsetY.value
-                    val scale = (1f - dismissProgress * 0.08f).coerceIn(0.92f, 1f)
+                    translationY = offsetY
+                    val p = (offsetY / screenHeightPx).coerceIn(0f, 1f)
+                    val scale = (1f - p * 0.08f).coerceIn(0.92f, 1f)
                     scaleX = scale
                     scaleY = scale
-                    val hasOffset = dragOffsetY.value > 0f
+                    val hasOffset = offsetY > 0f
                     clip = hasOffset
                     shape = RoundedCornerShape(
                         topStart = 16.dp,
                         topEnd = 16.dp,
-                        bottomStart = if (hasOffset) (dismissProgress * 16).dp else 0.dp,
-                        bottomEnd = if (hasOffset) (dismissProgress * 16).dp else 0.dp,
+                        bottomStart = if (hasOffset) (p * 16).dp else 0.dp,
+                        bottomEnd = if (hasOffset) (p * 16).dp else 0.dp,
                     )
                 }
                 .draggable(
                     state = draggableState,
                     orientation = Orientation.Vertical,
                     onDragStopped = { velocity ->
-                        if (dragOffsetY.value > dismissThreshold || velocity > 800f) {
+                        if (offsetY > dismissThreshold || velocity > 800f) {
                             dismissCard()
                         } else {
                             scope.launch {
-                                dragOffsetY.animateTo(0f, spring(stiffness = Spring.StiffnessMediumLow))
+                                animate(
+                                    initialValue = offsetY,
+                                    targetValue = 0f,
+                                    animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                                ) { value, _ ->
+                                    offsetY = value
+                                }
                             }
                         }
                     },
@@ -345,13 +357,25 @@ internal fun NowPlayingScreen(state: HomeState, vm: HypochloriteViewModel) {
                 .weight(1f)
                 .fillMaxWidth(),
         ) {
-            val onLyricsPage = showFullLyrics && hasLyrics
+            val showLyrics = showFullLyrics && hasLyrics
+            val lyricsProgress by animateFloatAsState(
+                targetValue = if (showLyrics) 1f else 0f,
+                animationSpec = tween(320, easing = CubicBezierEasing(0.1f, 0.9f, 0.2f, 1f)),
+                label = "lyricsCover",
+            )
             // 封面一直留在组合里：在歌词页切歌时完整动画仍在跑，切回封面才不会只剩后半段。
             Column(
                 Modifier
                     .align(Alignment.Center)
+                    .zIndex(if (lyricsProgress < 0.5f) 1f else 0f)
                     .fillMaxWidth()
-                    .graphicsLayer { alpha = if (onLyricsPage) 0f else 1f },
+                    .graphicsLayer {
+                        alpha = 1f - lyricsProgress
+                        val scale = 1f - 0.05f * lyricsProgress
+                        scaleX = scale
+                        scaleY = scale
+                        translationY = -12.dp.toPx() * lyricsProgress
+                    },
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                     Row(
@@ -366,9 +390,12 @@ internal fun NowPlayingScreen(state: HomeState, vm: HypochloriteViewModel) {
                                 .fillMaxHeight(),
                             contentAlignment = Alignment.CenterEnd,
                         ) {
-                            if (lyricSplit.vertical != null && left) {
-                                VerticalLyric(lyricSplit.vertical, Modifier.padding(end = 12.dp))
-                            }
+                            NowPlayingSideLyric(
+                                vm = vm,
+                                lines = state.player.lyricLines,
+                                left = true,
+                                modifier = Modifier.padding(end = 12.dp),
+                            )
                         }
                         val isAudioReady = (state.player.current?.id == song?.id) &&
                             (state.player.playable != null || state.player.playing || state.player.error != null)
@@ -383,7 +410,11 @@ internal fun NowPlayingScreen(state: HomeState, vm: HypochloriteViewModel) {
                             modifier = Modifier
                                 .size(200.dp)
                                 .then(
-                                    if (hasLyrics) Modifier.clickableNoRipple { showFullLyrics = true } else Modifier,
+                                    if (hasLyrics && lyricsProgress <= 0.02f) {
+                                        Modifier.clickableNoRipple { showFullLyrics = true }
+                                    } else {
+                                        Modifier
+                                    },
                                 )
                                 .coverPulse(coverPulseScale)
                                 .reportPrimaryCoverAnchor(),
@@ -394,9 +425,12 @@ internal fun NowPlayingScreen(state: HomeState, vm: HypochloriteViewModel) {
                                 .fillMaxHeight(),
                             contentAlignment = Alignment.CenterStart,
                         ) {
-                            if (lyricSplit.vertical != null && !left) {
-                                VerticalLyric(lyricSplit.vertical, Modifier.padding(start = 12.dp))
-                            }
+                            NowPlayingSideLyric(
+                                vm = vm,
+                                lines = state.player.lyricLines,
+                                left = false,
+                                modifier = Modifier.padding(start = 12.dp),
+                            )
                         }
                     }
                     Box(
@@ -409,40 +443,26 @@ internal fun NowPlayingScreen(state: HomeState, vm: HypochloriteViewModel) {
                             .height(lyricBlockHeight),
                         contentAlignment = Alignment.Center,
                     ) {
-                        if (lyricSplit.horizontal != null) {
-                            AnimatedContent(
-                                targetState = lyricSplit.horizontal,
-                                transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
-                                label = "en_lyric",
-                            ) { txt ->
-                                val len = txt.length
-                                val (fontSize, lineHeight) = when {
-                                    len > 80 -> 12.sp to 16.sp
-                                    len > 45 -> 13.sp to 18.sp
-                                    else -> 14.sp to 20.sp
-                                }
-                                BasicText(
-                                    text = txt,
-                                    style = BodyStyle.copy(
-                                        color = colors.titleInk,
-                                        fontSize = fontSize,
-                                        lineHeight = lineHeight,
-                                        textAlign = TextAlign.Center,
-                                    ),
-                                    maxLines = 3,
-                                    overflow = TextOverflow.Clip,
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-                                )
-                            }
-                        }
+                        NowPlayingEnglishLyric(
+                            vm = vm,
+                            lines = state.player.lyricLines,
+                        )
                     }
             }
-            if (onLyricsPage) {
-                ScrollingLyricView(
+            if (showLyrics || lyricsProgress > 0.01f) {
+                NowPlayingFullLyrics(
+                    vm = vm,
                     lines = state.player.lyricLines,
-                    currentIndex = state.player.lyricIndex,
-                    modifier = Modifier.fillMaxSize(),
-                    onSeek = { vm.seekMs(it) },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(if (lyricsProgress >= 0.5f) 1f else 0f)
+                        .graphicsLayer {
+                            alpha = lyricsProgress
+                            translationY = 16.dp.toPx() * (1f - lyricsProgress)
+                            val scale = 0.96f + 0.04f * lyricsProgress
+                            scaleX = scale
+                            scaleY = scale
+                        },
                 )
             }
         }
@@ -599,21 +619,25 @@ internal fun NowPlayingScreen(state: HomeState, vm: HypochloriteViewModel) {
         }
 
         val curSong = displayedSong ?: song ?: state.player.current
-        val durMs = if (state.player.durationMs > 0) state.player.durationMs else (curSong?.durationMs ?: 0L)
         val activeSongId = song?.id ?: curSong?.id
 
-        ProgressLine(
-            progress = progress,
-            positionMs = state.player.positionMs,
-            durationMs = durMs,
+        NowPlayingProgress(
+            vm = vm,
+            songDurationMs = curSong?.durationMs ?: 0L,
             trackKey = "${activeSongId ?: ""}_${state.songTransitionSeq}",
-            onSeek = { vm.seekFraction(it) },
         )
 
-        val isLiked = curSong != null && (
-            state.likedSongIds.contains(curSong.id) ||
-            state.playlistSongs.any { it.id == curSong.id && ((state.route as? Route.PlaylistSongs)?.playlist?.specialType == 5 || (state.route as? Route.PlaylistSongs)?.playlist?.name?.contains("喜欢") == true) }
-        )
+        val likedPlaylist = (state.route as? Route.PlaylistSongs)?.playlist
+        val isLiked = remember(curSong?.id, state.likedSongIds, likedPlaylist?.id, likedPlaylist?.specialType, likedPlaylist?.name, state.playlistSongs) {
+            curSong != null && (
+                state.likedSongIds.contains(curSong.id) ||
+                    (
+                        likedPlaylist != null &&
+                            (likedPlaylist.specialType == 5 || likedPlaylist.name.contains("喜欢")) &&
+                            state.playlistSongs.any { it.id == curSong.id }
+                        )
+                )
+        }
 
         Row(
             modifier = Modifier
@@ -671,6 +695,91 @@ internal fun NowPlayingScreen(state: HomeState, vm: HypochloriteViewModel) {
             }
         }
     }
+}
+
+@Composable
+private fun NowPlayingSideLyric(
+    vm: HypochloriteViewModel,
+    lines: List<LyricLine>,
+    left: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val idx = lyricIndex(vm)
+    val current = lines.getOrNull(idx) ?: return
+    val onLeft = idx >= 0 && idx % 2 == 0
+    if (onLeft != left) return
+    val vertical = remember(current.text) { Lyrics.splitLyric(current.text).vertical } ?: return
+    VerticalLyric(vertical, modifier)
+}
+
+@Composable
+private fun NowPlayingEnglishLyric(
+    vm: HypochloriteViewModel,
+    lines: List<LyricLine>,
+) {
+    val idx = lyricIndex(vm)
+    val current = lines.getOrNull(idx)
+    val horizontal = remember(current?.text) {
+        if (current != null) Lyrics.splitLyric(current.text).horizontal else null
+    } ?: return
+    val colors = LocalHypochloriteColors.current
+    AnimatedContent(
+        targetState = horizontal,
+        transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(120)) },
+        label = "en_lyric",
+    ) { txt ->
+        val len = txt.length
+        val (fontSize, lineHeight) = when {
+            len > 80 -> 12.sp to 16.sp
+            len > 45 -> 13.sp to 18.sp
+            else -> 14.sp to 20.sp
+        }
+        BasicText(
+            text = txt,
+            style = BodyStyle.copy(
+                color = colors.titleInk,
+                fontSize = fontSize,
+                lineHeight = lineHeight,
+                textAlign = TextAlign.Center,
+            ),
+            maxLines = 3,
+            overflow = TextOverflow.Clip,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+        )
+    }
+}
+
+@Composable
+private fun NowPlayingFullLyrics(
+    vm: HypochloriteViewModel,
+    lines: List<LyricLine>,
+    modifier: Modifier = Modifier,
+) {
+    val idx = lyricIndex(vm)
+    ScrollingLyricView(
+        lines = lines,
+        currentIndex = idx,
+        modifier = modifier,
+        onSeek = { vm.seekMs(it) },
+    )
+}
+
+@Composable
+private fun NowPlayingProgress(
+    vm: HypochloriteViewModel,
+    songDurationMs: Long,
+    trackKey: String,
+) {
+    val clock = playerClock(vm)
+    val durMs = if (clock.durationMs > 0) clock.durationMs else songDurationMs
+    val progress = if (durMs > 0) clock.positionMs.toFloat() / durMs else 0f
+    ProgressLine(
+        progress = progress,
+        positionMs = clock.positionMs,
+        durationMs = durMs,
+        trackKey = trackKey,
+        onSeek = { vm.seekFraction(it) },
+    )
 }
 
 /**

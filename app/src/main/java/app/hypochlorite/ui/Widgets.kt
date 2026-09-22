@@ -970,20 +970,30 @@ private fun Drawable.toSafeBitmap(): Bitmap {
 fun Cover(
     url: String?,
     modifier: Modifier = Modifier,
+    px: Int = CoverUrls.LIST_PX,
 ) {
     val colors = LocalHypochloriteColors.current
+    val context = LocalContext.current
     val borderAlpha = if (colors.isLight) 0.15f else 0.45f
+    val data = remember(url, px) {
+        url?.takeIf { it.isNotEmpty() }?.let { CoverUrls.sized(it, px) }
+    }
+    val request = remember(data) {
+        data?.let {
+            ImageRequest.Builder(context)
+                .data(it)
+                .crossfade(true)
+                .build()
+        }
+    }
     Box(
         modifier = modifier
             .background(colors.cover)
             .border(1.dp, colors.text.copy(alpha = borderAlpha)),
     ) {
-        if (!url.isNullOrEmpty()) {
+        if (request != null) {
             AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(url)
-                    .crossfade(true)
-                    .build(),
+                model = request,
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
@@ -1057,9 +1067,9 @@ fun CornerAccents(
     color: Color,
     scale: Float = 1.0f,
     offsetDp: Float = 0f,
-    assemblyProgress: Float = 0f,
-    diagonal: Float = 0f,
-    morph: Float = 1f,
+    assemblyProgress: () -> Float = { 0f },
+    diagonal: () -> Float = { 0f },
+    morph: () -> Float = { 1f },
     modifier: Modifier = Modifier,
 ) {
     if (scale <= 0.01f) return
@@ -1078,7 +1088,7 @@ fun CornerAccents(
         val cy = h / 2f
         val halfBox = armLen / 2f
 
-        val p = assemblyProgress.coerceIn(0f, 1f)
+        val p = assemblyProgress().coerceIn(0f, 1f)
 
         // **p = 0 就是角标的静止形态，必须画。**
         // p=0 时顶点落在画面外 [-gap, -gap]，两条臂朝内伸出 —— 视觉上就是扣在封面
@@ -1096,7 +1106,7 @@ fun CornerAccents(
          *
          * 留下的那根线是**水平**的 —— 跟横移方向一致，看着才像「线滑过去」。
          */
-        val morphRaw = morph.coerceIn(0f, 1f)
+        val morphRaw = morph().coerceIn(0f, 1f)
         val shapeT = morphRaw * morphRaw * (3f - 2f * morphRaw) // smoothstep，收放带一点力度
         val vArm = armLen * shapeT
 
@@ -1109,7 +1119,7 @@ fun CornerAccents(
         // 用 ±1 表示方位，两条臂统一朝「内侧」延伸，于是组 A 与组 B 各自成立，不必分开写。
         // ax 由 [diagonal] 连续映射到 [-1, 1]：取端点值时就是原来的两组对角，
         // 中间值代表「正在横移」的那一帧 —— 这是换方位动画的唯一来源。
-        val ax = diagonal.coerceIn(0f, 1f) * 2f - 1f
+        val ax = diagonal().coerceIn(0f, 1f) * 2f - 1f
         val bx = -ax
 
         // 角 1：上侧。开放点在画面外，目标点是中心矩形的上左/上右顶点。
@@ -1403,7 +1413,7 @@ fun KineticCoverFrame(
             withContext(Dispatchers.IO) {
                 runCatching {
                     val req = ImageRequest.Builder(context)
-                        .data(targetCover)
+                        .data(CoverUrls.sized(targetCover, CoverUrls.HERO_PX))
                         .allowHardware(true)
                         .build()
                     context.imageLoader.execute(req)
@@ -1490,6 +1500,7 @@ fun KineticCoverFrame(
                 Cover(
                     url = displayedCover,
                     modifier = Modifier.fillMaxSize(),
+                    px = CoverUrls.HERO_PX,
                 )
             }
 
@@ -1498,18 +1509,18 @@ fun KineticCoverFrame(
             // 缩小阶段：bgScale 从 1f -> 角框内净空（**不是 0**，要留一块被角框住的小方块）
             // 展开阶段：bgScale 从角框内净空 -> 1f，与角标炸开同起同落
             // 挖洞阶段：在背景中心挖洞钻开 (bgHoleProgress: 0f -> 1f)
-            if (bgAlpha.value > 0f && bgScale.value > 0.001f) {
-                Canvas(
-                    Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            translationX = bgSlideOffset.value * size.width
-                            alpha = bgAlpha.value
-                        }
-                ) {
-                    val w = size.width
-                    val h = size.height
-                    if (w <= 0f || h <= 0f) return@Canvas
+            Canvas(
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        translationX = bgSlideOffset.value * size.width
+                        alpha = bgAlpha.value
+                    }
+            ) {
+                if (bgAlpha.value <= 0f || bgScale.value <= 0.001f) return@Canvas
+                val w = size.width
+                val h = size.height
+                if (w <= 0f || h <= 0f) return@Canvas
 
                     val scale = bgScale.value.coerceIn(0f, 1f)
                     val holeP = bgHoleProgress.value.coerceIn(0f, 1f)
@@ -1562,31 +1573,28 @@ fun KineticCoverFrame(
                         // —— 32dp 缩略图上那条线尤其像渲染残留。擦除现在是一块纯色直接退场。
                         // **不要再以「切边才有厚度」为由加回来**；要加得先问，因为这是明确否掉过的。
                     }
-                }
             }
         }
 
         // 顶层：角标 / 拼合正方形「口」
         // 由 cornerAssembly 负责在边缘折角与中心正方形「口」之间连续插值
-        if (cornerAlpha.value > 0f) {
-            CornerAccents(
-                // 与取色方块共用同一个动画色：角标随新配色一起淡过来
-                color = accent,
-                scale = 1.0f,
-                offsetDp = 0f,
-                assemblyProgress = cornerAssembly.value,
-                // 方位由 swingDiagonal 在**画面内**动画着换（角先合拢成细线，细线横移过去再展开），
-                // 不再是按切歌序号硬切。
-                diagonal = diagAnim.value,
-                // 形态平时恒为 1f（完整 L 角），只有换方位那一下才降到 0f
-                morph = cornerMorph.value,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        alpha = cornerAlpha.value
-                    },
-            )
-        }
+        CornerAccents(
+            // 与取色方块共用同一个动画色：角标随新配色一起淡过来
+            color = accent,
+            scale = 1.0f,
+            offsetDp = 0f,
+            assemblyProgress = { cornerAssembly.value },
+            // 方位由 swingDiagonal 在**画面内**动画着换（角先合拢成细线，细线横移过去再展开），
+            // 不再是按切歌序号硬切。
+            diagonal = { diagAnim.value },
+            // 形态平时恒为 1f（完整 L 角），只有换方位那一下才降到 0f
+            morph = { cornerMorph.value },
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    alpha = cornerAlpha.value
+                },
+        )
     }
 }
 
