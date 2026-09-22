@@ -19,6 +19,7 @@ import androidx.lifecycle.viewModelScope
 import app.hypochlorite.netease.Album
 import app.hypochlorite.netease.Crypto
 import app.hypochlorite.netease.ListenRoomKind
+import app.hypochlorite.netease.listenCanDropQueueTo
 import app.hypochlorite.netease.Playlist
 import app.hypochlorite.netease.Song
 import app.hypochlorite.netease.parseListenInvite
@@ -464,9 +465,21 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
 
     fun listenLeaveRoom() {
         app.listen.leaveRoom()
-        // 房间散了就不该停在房间页 —— 留在那会显示一个空房间
-        if (_ui.value.route == Route.ListenTogether) back()
     }
+
+    /**
+     * 房间已经没了，才离开房间页。
+     * 退出请求还在飞、或者失败了，就留在这页，错误文案才看得见。
+     */
+    fun dismissListenScreen() {
+        if (_ui.value.route != Route.ListenTogether) return
+        val prev = stack.removeLastOrNull() ?: Route.Home
+        _ui.update { it.copy(route = prev, roamAnimating = false) }
+    }
+
+    fun listenNote(message: String) = app.listen.note(message)
+
+    fun listenNotify(message: String) = app.listen.notify(message)
 
     /** 在任意歌曲列表里长按 → 把这首歌加进房间队列（不切歌）。 */
     fun listenPushSong(song: Song) = app.listen.addSongToRoomQueue(song)
@@ -1023,11 +1036,24 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
     /** 点队列里的某一首：窗口里有就无缝 seek 过去，没有才重新加载 */
     fun queueJumpAt(index: Int) = app.player.jumpTo(index)
 
-    fun queueRemoveAt(index: Int) = app.player.removeFromQueue(index)
+    fun queueRemoveAt(index: Int) {
+        val after = _ui.value.player.queue.size - 1
+        if (!listenCanDropQueueTo(_ui.value.listen.room != null, after)) {
+            app.listen.notify("一起听至少留一首，空队列同步不出去")
+            return
+        }
+        app.player.removeFromQueue(index)
+    }
 
     fun queueMove(from: Int, to: Int) = app.player.moveInQueue(from, to)
 
-    fun queueClear() = app.player.clearQueue()
+    fun queueClear() {
+        if (!listenCanDropQueueTo(_ui.value.listen.room != null, 0)) {
+            app.listen.notify("一起听至少留一首，空队列同步不出去")
+            return
+        }
+        app.player.clearQueue()
+    }
 
     fun openLogin() = push(Route.Login)
 

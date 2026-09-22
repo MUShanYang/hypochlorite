@@ -13,6 +13,8 @@ import app.hypochlorite.netease.incrementListenVersion
 import app.hypochlorite.netease.isListenClosed
 import app.hypochlorite.netease.listenCreatedRoomId
 import app.hypochlorite.netease.listenPlayback
+import app.hypochlorite.netease.listenQueueEditCommand
+import app.hypochlorite.netease.listenQueueNeedsSync
 import app.hypochlorite.netease.listenRoomStatus
 import app.hypochlorite.netease.mergeListenVersions
 import app.hypochlorite.netease.parseListenInvite
@@ -45,6 +47,9 @@ private const val SEEK_TOLERANCE_MS = 4_000L
 
 /** 列表同步落地之后再发播放指令，不然指令会打在旧列表上。 */
 private const val PLAYLIST_SETTLE_MS = 400L
+
+/** 拖动排序会连着改好几格。停一下再报，避免每一格都打一次列表同步。 */
+private const val QUEUE_EDIT_MS = 600L
 
 /** 房间链路。界面用它区分「接通中 / 已同步 / 正在重连」，不把断线画成已经退出。 */
 enum class ListenLink {
@@ -81,6 +86,7 @@ private data class PlayKey(val trackId: String?, val playing: Boolean)
  * - 建房分双人 / 多人。加入必须带邀请人和房间号，先 accept 再 check。
  * - 每 3 秒拉 status 和 playlist。播放对齐看 playlist 里的 playCommand，按 clientSeq 去重。
  * - 本地切歌、播放、暂停从播放器状态里报出去；拖动进度单独报 SEEK。
+ * - 只改队列（加歌、删歌、调顺序）不切歌，停一停再补一次列表同步，指令保持播放或暂停。
  * - 自己刚套用的远端状态记在 [pending]，避免回声再报一遍。
  * - 488，或者连续两次 status 说不在房间，就退出。
  */
@@ -96,6 +102,7 @@ class ListenTogether(
     private val gate = Mutex()
     private var actionJob: Job? = null
     private var loopJob: Job? = null
+    private var queueReportJob: Job? = null
     private var generation = 0
 
     private var sequence = 1L
@@ -274,6 +281,11 @@ class ListenTogether(
         if (message.isNotEmpty()) _state.update { it.copy(toast = message) }
     }
 
+    /** 扫码打不开这类留在房间页上的失败。和 toast 不一样，它得停着让人看见。 */
+    fun note(message: String) {
+        if (message.isNotEmpty()) _state.update { it.copy(error = message) }
+    }
+
     /** 拖动进度。切歌和播放暂停由播放器状态自己报，拖动不会改那两个字段。 */
     fun broadcastSeek(positionMs: Long) {
         if (_state.value.room == null) return
@@ -328,6 +340,8 @@ class ListenTogether(
     }
 
     private fun enter(roomId: String, inviterId: Long, hosting: Boolean, members: List<ListenParticipant>) {
+        queueReportJob?.cancel()
+        queueReportJob = null
         _state.update {
             it.copy(
                 room = snapshot(roomId, inviterId, hosting, members),
@@ -375,6 +389,8 @@ class ListenTogether(
     }
 
     private fun resetCounters() {
+        queueReportJob?.cancel()
+        queueReportJob = null
         sequence = 1L
         versions = emptyList()
         playback = null
@@ -516,8 +532,9 @@ class ListenTogether(
             val songs = loadSongs(ids)
             if (generation != gen) return
             if (songs.any { it.id == target }) {
-                player.replaceQueue(songs, keepCurrent = true)
+                // 先记下即将落地的队列，播放器一更新，队列监听就不会把它再报回去。
                 lastReportedIds = songs.mapNotNull { it.id.toLongOrNull() }
+                player.replaceQueue(songs, keepCurrent = true)
             }
         }
 
@@ -526,7 +543,10 @@ class ListenTogether(
             snap.playing == shouldPlay &&
             abs(snap.positionMs - remote.progressMillis) < SEEK_TOLERANCE_MS &&
             snap.queue.map { it.id } == idStrings
-        if (aligned) return
+        if (aligned) {
+            lastReportedIds = ids
+            return
+        }
 
         if (snap.current?.id != target) {
             pending = PlayKey(target, shouldPlay)
@@ -650,11 +670,38 @@ class ListenTogether(
     private fun observeQueue() {
         scope.launch {
             player.state
-                .map { it.queue }
+                .map { snap -> snap.queue to queueIds(snap.queue) }
                 .distinctUntilChanged()
-                .collect { queue ->
-                    if (_state.value.room != null) _state.update { it.copy(roomQueue = queue) }
+                .collect { (queue, ids) ->
+                    _state.update { state ->
+                        if (state.room == null) state else state.copy(roomQueue = queue)
+                    }
+                    queueReportJob?.cancel()
+                    if (!listenQueueNeedsSync(_state.value.room != null, ids, lastReportedIds)) return@collect
+                    queueReportJob = launch {
+                        delay(QUEUE_EDIT_MS)
+                        try {
+                            gate.withLock {
+                                val now = player.state.value
+                                val nowIds = queueIds(now.queue)
+                                if (!listenQueueNeedsSync(_state.value.room != null, nowIds, lastReportedIds)) {
+                                    return@withLock
+                                }
+                                report(listenQueueEditCommand(now.playing), forceQueue = true)
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            _state.update { state ->
+                                if (state.room == null) state
+                                else state.copy(error = e.message?.takeIf { it.isNotBlank() } ?: "队列没能同步过去")
+                            }
+                        }
+                    }
                 }
         }
     }
+
+    private fun queueIds(queue: List<Song>): List<Long> =
+        queue.mapNotNull { it.id.toLongOrNull() }.distinct()
 }

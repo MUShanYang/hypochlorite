@@ -153,6 +153,21 @@ class ListenTogetherProtocolTest {
     }
 
     @Test
+    fun queueEditsSyncWhenTheOrderChangesAndDoNotPretendToRestart() {
+        assertTrue(listenQueueNeedsSync(true, listOf(1L, 2L), listOf(2L, 1L)))
+        assertTrue(listenQueueNeedsSync(true, listOf(1L, 2L, 3L), listOf(1L, 2L)))
+        assertFalse(listenQueueNeedsSync(true, listOf(1L, 2L), listOf(1L, 2L)))
+        assertFalse(listenQueueNeedsSync(false, listOf(1L), emptyList()))
+        assertFalse(listenQueueNeedsSync(true, emptyList(), listOf(1L)))
+        assertFalse(listenQueueNeedsSync(true, emptyList(), emptyList()))
+        assertEquals("PLAY", listenQueueEditCommand(playing = true))
+        assertEquals("PAUSE", listenQueueEditCommand(playing = false))
+        assertFalse(listenCanDropQueueTo(inRoom = true, sizeAfter = 0))
+        assertTrue(listenCanDropQueueTo(inRoom = true, sizeAfter = 2))
+        assertTrue(listenCanDropQueueTo(inRoom = false, sizeAfter = 0))
+    }
+
+    @Test
     fun rejectedPayloadIsAFailureEvenWhenCodeIs200() {
         val response = JSONObject("""{"code":200,"data":{"success":"false","message":"房间已满"}}""")
         val error = runCatching { requireListenSuccess(response) }.exceptionOrNull()
