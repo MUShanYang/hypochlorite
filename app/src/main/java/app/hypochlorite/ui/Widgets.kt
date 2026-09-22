@@ -101,7 +101,10 @@ import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import kotlin.math.abs
 import kotlin.math.hypot
 import androidx.compose.ui.unit.Density
@@ -183,6 +186,87 @@ fun MonoText(
     )
 }
 
+/**
+ * 搜索命中的那一段用主题色标出来。没匹配上时和普通正文一样。
+ */
+@Composable
+fun HighlightText(
+    text: String,
+    query: String,
+    modifier: Modifier = Modifier,
+    bold: Boolean = false,
+    muted: Boolean = false,
+    size: Int = 14,
+    maxLines: Int = 1,
+    marquee: Boolean = false,
+) {
+    val colors = LocalHypochloriteColors.current
+    val base = if (muted) colors.muted else colors.text
+    val accent = colors.accent
+    val annotated = remember(text, query, accent) {
+        buildAnnotatedString {
+            appendHighlighted(text, query, accent)
+        }
+    }
+    val textMod = if (marquee) {
+        modifier.basicMarquee(
+            iterations = Int.MAX_VALUE,
+            initialDelayMillis = 1500,
+            repeatDelayMillis = 1500,
+            velocity = 30.dp,
+        )
+    } else modifier
+    BasicText(
+        text = annotated,
+        modifier = textMod,
+        style = BodyStyle.copy(
+            color = base,
+            fontWeight = if (bold) HeavyBold else FontWeight.Normal,
+            fontSize = size.sp,
+            lineHeight = (size * 1.25f).sp,
+        ),
+        maxLines = maxLines,
+        overflow = if (marquee) TextOverflow.Clip else TextOverflow.Ellipsis,
+        softWrap = maxLines != 1 && !marquee,
+    )
+}
+
+private fun androidx.compose.ui.text.AnnotatedString.Builder.appendHighlighted(
+    text: String,
+    query: String,
+    accent: Color,
+) {
+    val q = query.trim()
+    if (q.isEmpty() || q.length > text.length) {
+        append(text)
+        return
+    }
+    var i = 0
+    while (i < text.length) {
+        val hit = indexOfIgnoreCase(text, q, i)
+        if (hit < 0) {
+            append(text.substring(i))
+            return
+        }
+        if (hit > i) append(text.substring(i, hit))
+        withStyle(SpanStyle(color = accent)) {
+            append(text.substring(hit, hit + q.length))
+        }
+        i = hit + q.length
+    }
+}
+
+private fun indexOfIgnoreCase(text: String, query: String, from: Int): Int {
+    if (query.isEmpty() || from > text.length - query.length) return -1
+    var i = from
+    val last = text.length - query.length
+    while (i <= last) {
+        if (text.regionMatches(i, query, 0, query.length, ignoreCase = true)) return i
+        i++
+    }
+    return -1
+}
+
 @Composable
 fun HoverBold(
     text: String,
@@ -227,6 +311,7 @@ fun SongRow(
     index: Int = 0,
     isLiked: Boolean = false,
     onLongPress: (() -> Unit)? = null,
+    highlight: String = "",
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -365,25 +450,49 @@ fun SongRow(
             Spacer(Modifier.width(10.dp))
             val colors = LocalHypochloriteColors.current
             Column(Modifier.weight(1f)) {
-                MonoText(
-                    text = song.name,
-                    bold = on || pressed,
-                    color = if (on) colors.accent else Color.Unspecified,
-                    maxLines = 1,
-                    marquee = true,
-                    size = 14,
-                )
-                val artist = song.artists.joinToString(" / ").ifEmpty { song.album.orEmpty() }
-                if (artist.isNotEmpty()) {
-                    MonoText(
-                        text = artist,
-                        muted = !on,
-                        color = if (on) Color.Unspecified else colors.muted,
+                val mark = highlight.isNotBlank() && !on
+                if (mark) {
+                    HighlightText(
+                        text = song.name,
+                        query = highlight,
+                        bold = pressed,
                         maxLines = 1,
                         marquee = true,
-                        size = 11,
-                        modifier = Modifier.padding(top = 2.dp),
+                        size = 14,
                     )
+                } else {
+                    MonoText(
+                        text = song.name,
+                        bold = on || pressed,
+                        color = if (on) colors.accent else Color.Unspecified,
+                        maxLines = 1,
+                        marquee = true,
+                        size = 14,
+                    )
+                }
+                val artist = song.artists.joinToString(" / ").ifEmpty { song.album }
+                if (artist.isNotEmpty()) {
+                    if (mark) {
+                        HighlightText(
+                            text = artist,
+                            query = highlight,
+                            muted = true,
+                            maxLines = 1,
+                            marquee = true,
+                            size = 11,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    } else {
+                        MonoText(
+                            text = artist,
+                            muted = !on,
+                            color = if (on) Color.Unspecified else colors.muted,
+                            maxLines = 1,
+                            marquee = true,
+                            size = 11,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
                 }
             }
             if (on) {
@@ -466,6 +575,8 @@ fun PlaylistRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     index: Int = 0,
+    caption: String? = null,
+    highlight: String = "",
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -501,20 +612,44 @@ fun PlaylistRow(
         Cover(playlist.cover, modifier = Modifier.size(54.dp))
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            MonoText(
-                text = playlist.name,
-                bold = pressed,
-                maxLines = 1,
-                marquee = true,
-                size = 15,
-            )
-            if (playlist.trackCount > 0) {
-                MonoText(
-                    text = "${playlist.trackCount} 首",
-                    muted = true,
-                    size = 12,
-                    modifier = Modifier.padding(top = 3.dp),
+            if (highlight.isNotBlank()) {
+                HighlightText(
+                    text = playlist.name,
+                    query = highlight,
+                    bold = pressed,
+                    maxLines = 1,
+                    marquee = true,
+                    size = 15,
                 )
+            } else {
+                MonoText(
+                    text = playlist.name,
+                    bold = pressed,
+                    maxLines = 1,
+                    marquee = true,
+                    size = 15,
+                )
+            }
+            val detail = caption ?: if (playlist.trackCount > 0) "${playlist.trackCount} 首" else ""
+            if (detail.isNotEmpty()) {
+                if (highlight.isNotBlank()) {
+                    HighlightText(
+                        text = detail,
+                        query = highlight,
+                        muted = true,
+                        maxLines = 1,
+                        marquee = true,
+                        size = 12,
+                        modifier = Modifier.padding(top = 3.dp),
+                    )
+                } else {
+                    MonoText(
+                        text = detail,
+                        muted = true,
+                        size = 12,
+                        modifier = Modifier.padding(top = 3.dp),
+                    )
+                }
             }
         }
     }
@@ -1798,12 +1933,16 @@ fun ExpandingSearch(
     onSearch: () -> Unit,
     focusRequester: FocusRequester,
     onFocus: (Boolean) -> Unit,
+    hint: String = "",
+    onClear: (() -> Unit)? = null,
+    lockOpen: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalHypochloriteColors.current
     val density = LocalDensity.current
+    val shown = open || lockOpen
     val expand by animateFloatAsState(
-        targetValue = if (open) 1f else 0f,
+        targetValue = if (shown) 1f else 0f,
         animationSpec = tween(300, easing = SearchExpandEase),
         label = "search_expand",
     )
@@ -1812,19 +1951,27 @@ fun ExpandingSearch(
         modifier = modifier.onSizeChanged { maxPx = it.width },
         contentAlignment = Alignment.CenterEnd,
     ) {
-        val maxDp = with(density) { maxPx.toDp() }
-        val start = if (maxPx == 0) SearchCollapsedWidth else SearchCollapsedWidth.coerceAtMost(maxDp)
-        val frameWidth = start + (maxDp - start).coerceAtLeast(0.dp) * expand
-        val labelAlpha = (1f - expand * 1.7f).coerceIn(0f, 1f)
-        val fieldAlpha = ((expand - 0.28f) / 0.72f).coerceIn(0f, 1f)
-        FourCornerFrame(
-            modifier = Modifier
+        val frameModifier = if (lockOpen) {
+            Modifier
+                .fillMaxWidth()
+                .height(SearchFrameHeight)
+        } else {
+            val maxDp = with(density) { maxPx.toDp() }
+            val start = if (maxPx == 0) SearchCollapsedWidth else SearchCollapsedWidth.coerceAtMost(maxDp)
+            val frameWidth = start + (maxDp - start).coerceAtLeast(0.dp) * expand
+            Modifier
                 .width(if (maxPx == 0) SearchCollapsedWidth else frameWidth)
                 .height(SearchFrameHeight)
-                .then(if (!open) Modifier.clickableNoRipple(onOpen) else Modifier),
-            color = if (open) colors.text else colors.muted,
+        }
+        val labelAlpha = (1f - expand * 1.7f).coerceIn(0f, 1f)
+        val fieldAlpha = if (lockOpen) 1f else ((expand - 0.28f) / 0.72f).coerceIn(0f, 1f)
+        FourCornerFrame(
+            modifier = frameModifier.then(if (!shown) Modifier.clickableNoRipple(onOpen) else Modifier),
+            color = if (shown) colors.text else colors.muted,
         ) {
-            if (open) {
+            if (shown) {
+                val clear = onClear
+                val showClear = !query.isEmpty() && clear != null
                 BasicTextField(
                     value = query,
                     onValueChange = onQueryChange,
@@ -1843,18 +1990,43 @@ fun ExpandingSearch(
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { onSearch() }),
                     decorationBox = { inner ->
-                        Box(
-                            Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = 10.dp),
-                            contentAlignment = Alignment.CenterStart,
-                        ) {
-                            inner()
+                        Box(Modifier.fillMaxSize()) {
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .padding(start = 10.dp, end = if (showClear) 30.dp else 10.dp),
+                                contentAlignment = Alignment.CenterStart,
+                            ) {
+                                if (query.isEmpty() && hint.isNotEmpty()) {
+                                    BasicText(
+                                        text = hint,
+                                        style = BodyStyle.copy(
+                                            color = colors.muted,
+                                            fontSize = 13.sp,
+                                            lineHeight = 16.sp,
+                                        ),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                inner()
+                            }
+                            if (clear != null && query.isNotEmpty()) {
+                                Box(
+                                    Modifier
+                                        .align(Alignment.CenterEnd)
+                                        .clickableNoRipple { clear() }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    CrossIcon(color = colors.muted, size = 10.dp)
+                                }
+                            }
                         }
                     },
                 )
             }
-            if (labelAlpha > 0.01f && (!open || query.isEmpty())) {
+            if (!lockOpen && labelAlpha > 0.01f && (!open || query.isEmpty())) {
                 BasicText(
                     text = "SEARCH",
                     modifier = Modifier
@@ -1871,6 +2043,34 @@ fun ExpandingSearch(
                 )
             }
         }
+    }
+}
+
+@Composable
+fun CrossIcon(
+    color: Color = Color.Unspecified,
+    size: Dp = 12.dp,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalHypochloriteColors.current
+    val ink = if (color == Color.Unspecified) colors.text else color
+    Canvas(modifier = modifier.size(size)) {
+        val sw = 1.4.dp.toPx()
+        val inset = sw
+        drawLine(
+            ink,
+            Offset(inset, inset),
+            Offset(this.size.width - inset, this.size.height - inset),
+            sw,
+            StrokeCap.Square,
+        )
+        drawLine(
+            ink,
+            Offset(this.size.width - inset, inset),
+            Offset(inset, this.size.height - inset),
+            sw,
+            StrokeCap.Square,
+        )
     }
 }
 

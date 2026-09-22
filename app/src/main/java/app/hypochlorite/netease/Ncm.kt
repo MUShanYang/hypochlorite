@@ -60,6 +60,14 @@ object Ncm {
     private const val OSVER_PC = "Microsoft-Windows-10-Professional-build-19045-64bit"
     private const val CHANNEL = "netease"
 
+    /**
+     * 一起听会记住建房时声明的客户端版本，官方 App 拒绝它认为过时的成员。
+     * 这些请求对外宣称当前移动端，并且只写在这一次请求上，不进会话 cookie。
+     */
+    enum class ClientIdentity(val os: String, val appver: String, val versioncode: String) {
+        MOBILE("android", "9.5.95", "9005095"),
+    }
+
     /** 一次请求的结果。`json == null` 表示响应不是 JSON（网络失败 / 通道被拦 / 加密未解开）。 */
     class Res(
         val status: Int,
@@ -100,11 +108,12 @@ object Ncm {
         fakeNmtid: Boolean = true,
         domain: String = "",
         plainFallback: Boolean = true,
+        identity: ClientIdentity? = null,
     ): Res {
         val mode = if (crypto.isEmpty()) "eapi" else crypto
-        val first = send(http, session, mode, uri, data, fakeNmtid, domain)
+        val first = send(http, session, mode, uri, data, fakeNmtid, domain, identity)
         if (mode == "weapi" && plainFallback && first.json == null && first.status != 0) {
-            return send(http, session, "api", uri, data, fakeNmtid, DOMAIN)
+            return send(http, session, "api", uri, data, fakeNmtid, DOMAIN, identity)
         }
         return first
     }
@@ -118,10 +127,11 @@ object Ncm {
         data: JSONObject,
         fakeNmtid: Boolean,
         domain: String,
+        identity: ClientIdentity?,
     ): Res {
         // 会话 csrf 落定（没有才生成一次并落盘）—— weapi 载荷和 eapi header 都要用
         val csrf = session.getCsrf()
-        val cookie = processCookieObject(session, mode, csrf, fakeNmtid)
+        val cookie = identityCookie(processCookieObject(session, mode, csrf, fakeNmtid), identity)
 
         val builder = Request.Builder()
         when (mode) {
@@ -225,6 +235,19 @@ object Ncm {
             out["NMTID"] = "00O" + randomHex(19)
         }
         return out
+    }
+
+    /**
+     * 移动端身份只覆盖这一次请求的 os / appver / versioncode。
+     * 会话里继续留着 PC 三元组，避免一起听把日常接口的客户端标识带跑。
+     */
+    private fun identityCookie(cookie: Map<String, String>, identity: ClientIdentity?): Map<String, String> {
+        if (identity == null) return cookie
+        return cookie.toMutableMap().apply {
+            this["os"] = identity.os
+            this["appver"] = identity.appver
+            this["versioncode"] = identity.versioncode
+        }
     }
 
     private fun randomHex(length: Int): String {

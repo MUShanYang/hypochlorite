@@ -307,10 +307,16 @@ class SessionStore(context: Context) {
     fun getListenRoomId(): String? =
         runCatching { prefs.getString("listen_room_id", null) }.getOrNull()?.takeIf { it.isNotEmpty() }
 
-    fun saveListenRoom(roomId: String?, hosting: Boolean) {
+    fun saveListenRoom(roomId: String?, hosting: Boolean, inviterId: String? = null) {
         runCatching {
             prefs.edit().apply {
-                if (roomId.isNullOrEmpty()) remove("listen_room_id") else putString("listen_room_id", roomId)
+                if (roomId.isNullOrEmpty()) {
+                    remove("listen_room_id")
+                    remove("listen_inviter_id")
+                } else {
+                    putString("listen_room_id", roomId)
+                    if (!inviterId.isNullOrEmpty()) putString("listen_inviter_id", inviterId)
+                }
                 putBoolean("listen_room_hosting", hosting)
             }.apply()
         }
@@ -318,6 +324,9 @@ class SessionStore(context: Context) {
 
     fun isListenHosting(): Boolean =
         runCatching { prefs.getBoolean("listen_room_hosting", false) }.getOrDefault(false)
+
+    fun getListenInviterId(): String? =
+        runCatching { prefs.getString("listen_inviter_id", null) }.getOrNull()?.takeIf { it.isNotEmpty() }
 
     // 音质偏好。
     // 之前这一项只活在 `PlayerSnapshot` 里 —— 进程一没就回到默认的「高」，

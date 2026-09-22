@@ -100,6 +100,11 @@ data class PlayerSnapshot(
     val playMode: PlayMode = PlayMode.SEQUENCE,
     /** 播放历史（最近的在后）。内存态，不落盘 —— 队列的教训：prefs 不是数据库 */
     val history: List<Song> = emptyList(),
+    /**
+     * 正在给一首新歌准备音频。一起听要等它落地再决定要不要上报，
+     * 否则准备过程里的暂停会被当成用户按了暂停。
+     */
+    val loading: Boolean = false,
 )
 
 /**
@@ -383,6 +388,7 @@ class HypochloritePlayer(
                     val dur = runCatching {
                         exo.duration.let { if (it == C.TIME_UNSET || it < 0) 0 else it }
                     }.getOrDefault(0)
+                    val ready = playbackState == Player.STATE_READY || playbackState == Player.STATE_ENDED
                     if (playbackState == Player.STATE_ENDED) {
                         // 窗口还有下一项时 ExoPlayer 会自己接上去，根本走不到这儿；
                         // 到这里说明后面真的没东西了（漫游放到底 / 补窗失败）→ 走老路重新加载
@@ -396,6 +402,7 @@ class HypochloritePlayer(
                         it.copy(
                             durationMs = dur,
                             playing = runCatching { exo.isPlaying }.getOrDefault(false),
+                            loading = if (ready) false else it.loading,
                         )
                     }
                 }
@@ -934,6 +941,20 @@ class HypochloritePlayer(
         playAt(start.coerceIn(0, songs.lastIndex))
     }
 
+    /**
+     * 一起听把房间队列整段套上来，并落到对方正在放的那一首。
+     *
+     * 不走 [playAll]：进房要对齐对方的进度，而且对方暂停时这边也得停着。
+     */
+    fun playQueue(songs: List<Song>, songId: String, initialSeekMs: Long = 0L, autoPlay: Boolean = true) {
+        if (songs.isEmpty()) return
+        val at = songs.indexOfFirst { it.id == songId }
+        if (at < 0) return
+        dj.cancel()
+        _state.update { it.copy(queue = songs, index = at, current = songs[at], roam = false, error = null) }
+        playAt(at, initialSeekMs.coerceAtLeast(0L), autoPlay)
+    }
+
     fun playAt(at: Int, initialSeekMs: Long = 0L, autoPlay: Boolean = true) {
         val q = _state.value.queue
         if (at !in q.indices) return
@@ -943,14 +964,26 @@ class HypochloritePlayer(
         dj.cancel()
         recordHistory(_state.value.current.takeIf { it?.id != song.id })
         windowJob?.cancel()
-        _state.update { it.copy(index = at, current = song, error = null, lyricLines = emptyList(), lyricIndex = -1, lyricsResolved = false, positionMs = initialSeekMs, playable = null) }
+        _state.update {
+            it.copy(
+                index = at,
+                current = song,
+                error = null,
+                lyricLines = emptyList(),
+                lyricIndex = -1,
+                lyricsResolved = false,
+                positionMs = initialSeekMs,
+                playable = null,
+                loading = true,
+            )
+        }
         loadJob?.cancel()
         loadJob = scope.launch {
             try {
                 val playable = resolvePlayable(song)
                 if (gen != playGen) return@launch
                 if (playable.playUrl.isNullOrEmpty()) {
-                    _state.update { it.copy(error = "这首歌放不了", playable = playable) }
+                    _state.update { it.copy(error = "这首歌放不了", playable = playable, loading = false) }
                     return@launch
                 }
                 _state.update {
@@ -974,7 +1007,9 @@ class HypochloritePlayer(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (gen == playGen) _state.update { it.copy(error = e.message?.take(48) ?: "取流失败") }
+                if (gen == playGen) {
+                    _state.update { it.copy(error = e.message?.take(48) ?: "取流失败", loading = false) }
+                }
             }
         }
     }

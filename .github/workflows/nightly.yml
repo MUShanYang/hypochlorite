@@ -1,0 +1,61 @@
+name: Nightly
+
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Name nightly artifact
+        id: apk
+        run: |
+          short_sha="${GITHUB_SHA::7}"
+          branch="${GITHUB_REF_NAME//\//-}"
+          src="app/build/outputs/apk/debug/app-debug.apk"
+          out="hypochlorite-nightly-${branch}-${short_sha}.apk"
+          cp "$src" "$out"
+          echo "path=$out" >> "$GITHUB_OUTPUT"
+          echo "title=Nightly ${branch}@${short_sha}" >> "$GITHUB_OUTPUT"
+          ls -lh "$out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hypochlorite-nightly-apk
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+
+      # Rolling prerelease: every push refreshes the same "nightly" tag.
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: ${{ steps.apk.outputs.title }}
+          prerelease: true
+          generate_release_notes: true
+          files: ${{ steps.apk.outputs.path }}
+          body: |
+            自动夜间构建（推送触发）。
+
+            - 分支: `${{ github.ref_name }}`
+            - 提交: `${{ github.sha }}`
+            - 工作流: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
