@@ -16,10 +16,12 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import app.hypochlorite.netease.Crypto
 import app.hypochlorite.netease.Album
+import app.hypochlorite.netease.Crypto
+import app.hypochlorite.netease.ListenRoomKind
 import app.hypochlorite.netease.Playlist
 import app.hypochlorite.netease.Song
+import app.hypochlorite.netease.parseListenInvite
 import app.hypochlorite.player.ListenTogetherState
 import app.hypochlorite.player.PlaybackService
 import app.hypochlorite.player.PlayerSnapshot
@@ -447,11 +449,17 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
 
     fun setListenInput(s: String) = _ui.update { it.copy(listenInput = s) }
 
-    fun listenCreateRoom() = app.listen.createRoom()
+    fun listenCreateRoom(kind: ListenRoomKind = ListenRoomKind.Duo) = app.listen.createRoom(kind)
 
     fun listenJoinRoom(id: String = _ui.value.listenInput) {
-        app.listen.joinRoom(id)
-        _ui.update { it.copy(listenInput = "") }
+        app.listen.join(id)
+    }
+
+    /** 从分享链接进来。认不出邀请就当普通打开，不打断正在看的页面。 */
+    fun offerListenInvite(raw: String?) {
+        if (raw.isNullOrBlank() || parseListenInvite(raw) == null) return
+        openListen()
+        app.listen.join(raw)
     }
 
     fun listenLeaveRoom() {
@@ -851,58 +859,31 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
         } else {
             1
         }
-        // 在房间里点歌：**先确保它在房间队列里**，再切。
-        // 顺序反了会先切过去（此时队列里可能没这首），另一端收到 GOTO 却找不到歌。
-        if (inRoom) app.listen.addSongToRoomQueueIfMissing(song)
+        // 在房间里也是先改本机播放器。切歌会由一起听盯着播放状态上报，
+        // 对方收到的是这首歌，而不是各自再算一遍下一首。
         app.player.playSong(song)
-        if (inRoom) app.listen.broadcastGoto(song.id)
     }
 
     fun playAll(songs: List<Song>, start: Int = 0) {
         manualDirection = 1
         app.player.playAll(songs, start)
-        if (inRoom) {
-            // 整条队列换掉了 —— 房间队列必须跟着换，否则 next / 随机 两边会走岔
-            app.listen.syncQueue()
-            songs.getOrNull(start)?.let { app.listen.broadcastGoto(it.id) }
-        }
     }
 
     fun toggle() {
         app.player.toggle()
-        if (inRoom) {
-            val s = app.player.state.value
-            app.listen.broadcastToggle(playing = s.playing, positionMs = s.positionMs)
-        }
     }
 
     fun next() {
         manualDirection = 1
-        // 房间里 next 不能本地各自算 —— 两边算出的「下一首」可能不同。
-        // 走房间指令：由发起者算好目标歌广播出去，另一端跟着切。
-        if (inRoom) {
-            app.listen.broadcastNext()
-            return
-        }
         app.player.next(true)
     }
 
     fun prev(force: Boolean = false) {
         manualDirection = -1
-        if (inRoom) {
-            app.listen.broadcastPrev()
-            return
-        }
         app.player.prev(force)
     }
 
-    /**
-     * 在房间里就该把本地操作广播出去。
-     *
-     * 之前这里是 `connected && hosting`（只有房主有权），改掉了 ——
-     * 房间是共享点歌台，成员切歌同样要生效。服务端按 clientSeq 排序，最后一条赢。
-     */
-    private val inRoom: Boolean get() = _ui.value.listen.connected
+    private val inRoom: Boolean get() = _ui.value.listen.room != null
 
     fun audioLevel(): Float = app.player.audioLevel()
 
@@ -913,7 +894,7 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
 
     fun seekMs(ms: Long) {
         app.player.seek(ms)
-        if (_ui.value.listen.connected) app.listen.broadcastSeek(ms)
+        if (inRoom) app.listen.broadcastSeek(ms)
     }
 
     fun toggleLike(song: Song? = _ui.value.player.current) {
@@ -1540,11 +1521,13 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
 
     private fun isPhoneValid(phone: String) = phone.length == 11 && phone.startsWith("1")
 
-    /** 登录成功后的统一收尾：刷新首页数据并回到首页。 */
+    /** 登录成功后的统一收尾：刷新首页数据。若有一条还没用上的一起听邀请，回到房间页。 */
     private fun onLoggedIn() {
+        val reopenListen = app.listen.peekPending()
         refresh()
         stack.clear()
-        _ui.update { it.copy(route = Route.Home) }
+        _ui.update { it.copy(route = if (reopenListen) Route.ListenTogether else Route.Home) }
+        if (reopenListen) app.listen.onLoggedIn()
     }
 
     fun submitCookie() {
@@ -1565,21 +1548,25 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
     fun logout() {
         qrPoll?.cancel()
         smsCountdown?.cancel()
-        app.session.clear()
-        _ui.update {
-            it.copy(
-                loggedIn = false,
-                nickname = "未登录",
-                liked = emptyList(),
-                mine = emptyList(),
-                dailyPlaylists = emptyList(),
-                dailySongs = emptyList(),
-                likedSongIds = emptySet(),
-                loginMsg = "已退出",
-                phonePassword = "",
-                phoneCaptcha = "",
-                phoneCountdown = 0,
-            )
+        viewModelScope.launch {
+            app.listen.endForLogout()
+            app.session.clear()
+            _ui.update {
+                it.copy(
+                    loggedIn = false,
+                    nickname = "未登录",
+                    liked = emptyList(),
+                    mine = emptyList(),
+                    dailyPlaylists = emptyList(),
+                    dailySongs = emptyList(),
+                    likedSongIds = emptySet(),
+                    loginMsg = "已退出",
+                    phonePassword = "",
+                    phoneCaptcha = "",
+                    phoneCountdown = 0,
+                    profileUserId = null,
+                )
+            }
         }
     }
 
@@ -1625,6 +1612,8 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
             }
         }
     }
+
+    fun inviteQr(text: String): ImageBitmap = makeQr(text)
 
     private fun makeQr(text: String, size: Int = 168): ImageBitmap {
         val writer = QRCodeWriter()

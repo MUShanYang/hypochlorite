@@ -80,10 +80,13 @@ object Crypto {
     const val LT_SHARE_BASE = "https://st.music.163.com/listen-together/share/"
 
     fun ltShareUrl(roomId: String, songId: String? = null, inviterId: String? = null): String {
-        val sb = StringBuilder(LT_SHARE_BASE).append("?roomId=").append(roomId)
-        if (!songId.isNullOrEmpty()) sb.append("&songId=").append(songId)
-        if (!inviterId.isNullOrEmpty()) sb.append("&inviterId=").append(inviterId)
-        return sb.toString()
+        val song = songId?.toLongOrNull()?.takeIf { it > 0L } ?: LISTEN_SHARE_FALLBACK_SONG_ID
+        val inviter = inviterId?.toLongOrNull()?.takeIf { it > 0L }
+        return if (inviter != null) {
+            ListenInvite(roomId, inviter).shareUrl(song)
+        } else {
+            "$LT_SHARE_BASE?songId=$song&roomId=$roomId"
+        }
     }
 
     private const val BASE62 = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
