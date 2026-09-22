@@ -12,7 +12,6 @@ import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -1224,16 +1223,16 @@ fun KineticCoverFrame(
     /**
      * 角标当前方位：0f = ┌ 左上 + ┘ 右下，1f = ┐ 右上 + └ 左下。
      *
-     * 必须是会动的 [Animatable]，不能像原来那样由 `transitionSeq % 2` 直接算出来 ——
-     * 那样换方位是硬切，效果就是「角忽然换了方向，一点过渡都没有」。
+     * 用 [Animatable] 存当前对角；换歌时在中心「口」字定格后 [snapDiagonalAndExpand] 直接 snap
+     * 到另一组对角（不再细线横移），随后展开并在展开过程中闪烁。
      */
     val diagAnim = remember { Animatable(if (transitionSeq % 2L != 0L) 1f else 0f) }
 
     /**
      * 角的形态：1f = 完整的 L 角，0f = 只剩一根水平细线。
      *
-     * 平时恒为 1f —— **角在收拢 / 炸开这两段里必须一直是完整的角**，只有换方位那一下才变。
-     * 每次动画开始时都要 `snapTo(1f)` 复位，否则上次被打断留下的形态会带到下一次。
+     * 平时恒为 1f —— 收拢 / 炸开 / 换对角都保持完整 L 角；换对角已改为 snap，不再走细线形态。
+     * 每次动画开始时仍 `snapTo(1f)` 复位，以免旧路径被打断时留下细线形态。
      */
     val cornerMorph = remember { Animatable(1f) }
 
@@ -1241,78 +1240,60 @@ fun KineticCoverFrame(
     var lastHandledSeq by remember { mutableStateOf(transitionSeq) }
 
     /**
-     * 角标炸开归位，顺手把**方位**也换掉。
+     * 换歌后半段：对角**直接换位**（不滑动）→ 展开，且**展开过程中**持续闪烁。
      *
-     * 拆三段，因为「换方位」必须发生在**画面内**：
-     * 1. 角合拢成一根水平细线，同时 `p` 退到 0.45（这一段仍在画面里）；
-     * 2. 细线沿上下边缘横移到另一组对角 —— 这就是「滑动到指定处」；
-     * 3. 在新位置**张开成完整的角**，同时继续滑出画面。
+     * 调用时角标已停在中心「口」字（`cornerAssembly == 1`），色块缩在框内。
+     * 用户 2026-09-22：「切换封面的动画角移动位置改成缩成方块就变化」——
+     * 不要再把角合拢成细线、横移到另一组对角；缩住之后**直接 snap** 对角。
+     * 随后角炸开 + 色块放大；闪烁不是定格时闪一下，而是**跟展开并行、贯穿整段**
+     * （用户：「不只闪一下 而且是展开的过程中闪」）。
      *
-     * 第 3 步的 `cornerMorph` 回到 1f 是**必须的**：少了它，动画收了尾画面上还留着一根线
-     * （用户报的就是「动画都结束了还是竖线，没有变成角」）。
+     * `cornerMorph` 全程保持 1f（完整 L 角），不做「合拢成细线」那一套。
      *
-     * 顺带的好处：`p` 归零时角已经落在画面外，下一次收拢正好从**新方位**滑回来，接得上。
-     *
-     * @param growBlockTo 不为 null 时，取色方块**从细线开始横移那一刻起**就动，
-     *   但**前 200ms（细线横移那一段）只轻轻长一点**，等细线落位、角开始张开的最后 170ms 才冲满。
-     *   传 `1.0f` 就是「线在滑、角在开，方块同时在长大」；传 null 则完全不碰色块。
+     * @param growBlockTo 不为 null 时，展开阶段把取色方块放大到该值（通常 `1f`）；
+     *   传 null 则只动角标、不碰色块。
      */
-    suspend fun swingDiagonal(growBlockTo: Float? = null) {
-        coroutineScope {
-            // 1. 角合拢成一根水平细线，`p` 退到 0.45（这一段仍在画面里）
-            coroutineScope {
-                launch {
-                    cornerMorph.animateTo(0f, tween(130, easing = CubicBezierEasing(0.4f, 0f, 0.4f, 1f)))
-                }
-                cornerAssembly.animateTo(0.45f, tween(150, easing = CubicBezierEasing(0.3f, 0f, 0.35f, 1f)))
-            }
+    suspend fun snapDiagonalAndExpand(growBlockTo: Float? = null) {
+        // 1. 对角直接换位（无滑动）—— 仍停在中心「口」字上
+        cornerMorph.snapTo(1f)
+        diagAnim.snapTo(if (diagAnim.value < 0.5f) 1f else 0f)
 
-            // 2. 色块的放大**从细线开始横移的这一刻起跑**（用户 2026-09-19 00:0x：
-            //    「不是等到线运动完后方块才放大」），**但前 200ms 只轻轻长一点**。
-            //
-            //    为什么前段必须压住：色块和角标是**同一个颜色**，细线在横移那一段离画面中心
-            //    约 0.61×半边长；方块只要长过那个半径，整条线就被同色的方块吃掉 ——
-            //    用户 2026-09-19：「怎么到末尾 那个线还没有变角的时候 感觉被东西挡住了」。
-            //    所以横移期间方块只从「角框内的小方块」长到 2.2 倍（远小于细线所在半径，
-            //    **线全程看得见**），细线一落位就在最后 170ms 冲满。
-            //
-            //    为什么最后一段不会被挡：臂是**往画面外**跑（顶点最终落在 -gap），方块是
-            //    **往画面内**长，用 (0.4, 0, 0.6, 1) 这条近线性的缓动时方块的边始终追不上臂，
-            //    直到终点才把角吃掉 —— 那时候擦除已经开始了，看不出来。
-            //
-            //    演进史（别再绕回去）：
-            //      23:4x  角整段演完 → delay(40) → 方块放大   ← 用户：「角在放大的时候方块也要跟着变大」
-            //      23:5x  方块挂在**第三段**（张开成角）        ← 用户：「不是等到线运动完后方块才放大」
-            //      00:0x  方块挂在**第二段**，370ms 匀速长满     ← 用户：「线还没有变角的时候 感觉被东西挡住了」
-            //      现在   挂在**第二段**起跑，但前 200ms 只到 2.2 倍，后 170ms 才冲满
+        // 2. 展开（220ms）与闪烁并行：闪烁贯穿整段 expand，不是展开前单独闪一下
+        val expandMs = 220
+        coroutineScope {
+            // 取色方块 / 角框 alpha 明暗循环，直到展开结束再复位到 1
+            launch {
+                val dimMs = 40
+                val brightMs = 40
+                val cycle = dimMs + brightMs
+                val cycles = (expandMs + cycle - 1) / cycle // ≈ 3 次，盖住 220ms
+                repeat(cycles) {
+                    coroutineScope {
+                        launch {
+                            cornerAlpha.animateTo(0.22f, tween(dimMs, easing = LinearEasing))
+                        }
+                        bgAlpha.animateTo(0.28f, tween(dimMs, easing = LinearEasing))
+                    }
+                    coroutineScope {
+                        launch {
+                            cornerAlpha.animateTo(1f, tween(brightMs, easing = LinearEasing))
+                        }
+                        bgAlpha.animateTo(1f, tween(brightMs, easing = LinearEasing))
+                    }
+                }
+                cornerAlpha.snapTo(1f)
+                bgAlpha.snapTo(1f)
+            }
             val target = growBlockTo
             if (target != null) {
-                val hover = bgScale.value * 2.2f
                 launch {
                     bgScale.animateTo(
                         targetValue = target,
-                        animationSpec = keyframes {
-                            durationMillis = 370
-                            hover at 200 with LinearEasing
-                            target at 370 with CubicBezierEasing(0.4f, 0f, 0.6f, 1f)
-                        },
+                        animationSpec = tween(expandMs, easing = CubicBezierEasing(0.1f, 0.9f, 0.2f, 1.0f)),
                     )
                 }
             }
-
-            // 细线沿上下边缘横移到另一组对角 —— 这就是「滑动到指定处」
-            diagAnim.animateTo(
-                targetValue = if (diagAnim.value < 0.5f) 1f else 0f,
-                animationSpec = tween(200, easing = CubicBezierEasing(0.35f, 0f, 0.25f, 1f)),
-            )
-
-            // 3. 在新位置**张开成完整的角**，同时继续滑出画面
-            coroutineScope {
-                launch {
-                    cornerMorph.animateTo(1f, tween(160, easing = CubicBezierEasing(0.3f, 0f, 0.4f, 1f)))
-                }
-                cornerAssembly.animateTo(0.0f, tween(170, easing = CubicBezierEasing(0.3f, 0f, 0.5f, 1f)))
-            }
+            cornerAssembly.animateTo(0.0f, tween(expandMs, easing = CubicBezierEasing(0.2f, 0.0f, 0.1f, 1.0f)))
         }
     }
 
@@ -1322,8 +1303,8 @@ fun KineticCoverFrame(
     //   2. 紧接着：「底栏的那个动画的前与后你搞反了」→ 只留后半段 **等于把「遮盖」那半丢了**，
     //      「擦除方向与遮盖方向相反」在底栏根本没有对照物。
     // 现在底栏（手动 / 静默）与详情页跑的是**同一套完整顺序**：
-    //   色块按方向滑入（遮盖）→ 缩小到中心 → 角标拼「口」字 → 定格 → 角标炸开 + 换方位
-    //   → 色块放大铺满 → 挖洞擦除（朝滑入的相反一侧）露出新封面。实现见 [runFullTransition]。
+    //   色块按方向滑入（遮盖）→ 缩小到中心 → 角标拼「口」字 → 定格 → 对角 snap
+    //   → 角标炸开 + 色块放大（展开过程中持续闪烁）→ 挖洞擦除露出新封面。实现见 [runFullTransition]。
 
     /**
      * 详情页「进场」用的后半段：`cornerAssembly` 已经是 1（角标停在中心「口」字，
@@ -1353,7 +1334,7 @@ fun KineticCoverFrame(
         //    **两个 suspend 调用不要串起来，必须包在同一个 `coroutineScope` 里并行。**
         //    ⚠️ **进场不换方位** —— 打开详情页时用户并没有切歌，顺手把对角换掉是莫名的一下
         //    （用户 2026-09-18：「在打开的时候不用播放角切换位置的动画」）。
-        //    换方位只在**真的换歌**时演：`swingDiagonal()` 由 runFullTransition 调用。
+        //    换方位只在**真的换歌**时演：`snapDiagonalAndExpand()` 由 runFullTransition 调用。
         coroutineScope {
             launch {
                 bgScale.animateTo(
@@ -1427,11 +1408,9 @@ fun KineticCoverFrame(
         delay(80) // 稍作顿挫留白
 
         // 4. 放大与挖洞阶段（后半段）：
-        // ① 正方形裂开，角标炸开归位 + 在画面内换到另一组对角；**同一时刻**取色方块从角框里
-        //    放大铺满（`growBlockTo = 1f` 走 swingDiagonal 的第三段，见那里的说明）。
-        //    这里曾经是「角演完 → delay(40) → 色块再放大」，用户 2026-09-18 指出方向不对：
-        //    「角在放大的时候取色方块也跟着放大」—— 两件事必须同时发生。
-        swingDiagonal(growBlockTo = 1.0f)
+        // ① 对角直接 snap 换位（不滑动）→ 角炸开归位 + 色块放大，**展开过程中**持续闪烁
+        //    （见 [snapDiagonalAndExpand]）。
+        snapDiagonalAndExpand(growBlockTo = 1.0f)
 
         // ② 背景已铺满，底层就位新封面（100% 原始大小静态渲染，绝不放大缩放）
         displayedCover = incomingCover ?: coverUrl
@@ -1584,10 +1563,9 @@ fun KineticCoverFrame(
             scale = 1.0f,
             offsetDp = 0f,
             assemblyProgress = { cornerAssembly.value },
-            // 方位由 swingDiagonal 在**画面内**动画着换（角先合拢成细线，细线横移过去再展开），
-            // 不再是按切歌序号硬切。
+            // 方位由 snapDiagonalAndExpand 在中心「口」定格后直接 snap 换组（无细线横移）。
             diagonal = { diagAnim.value },
-            // 形态平时恒为 1f（完整 L 角），只有换方位那一下才降到 0f
+            // 形态平时恒为 1f（完整 L 角）；换对角不再走细线 morph
             morph = { cornerMorph.value },
             modifier = Modifier
                 .fillMaxSize()
