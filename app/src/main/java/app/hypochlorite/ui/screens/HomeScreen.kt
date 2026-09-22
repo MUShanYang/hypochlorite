@@ -24,8 +24,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,6 +56,9 @@ import app.hypochlorite.ui.PlaylistRow
 import app.hypochlorite.ui.SettingsIcon
 import app.hypochlorite.ui.SongRow
 import app.hypochlorite.ui.TogetherIcon
+import app.hypochlorite.ui.slice
+import app.hypochlorite.ui.homeHeaderUi
+import app.hypochlorite.ui.homeLibraryUi
 import app.hypochlorite.ui.clickableNoRipple
 import app.hypochlorite.ui.sections.MiniBar
 import app.hypochlorite.ui.theme.LocalHypochloriteColors
@@ -61,9 +66,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
-internal fun HomeScreen(state: HomeState, vm: HypochloriteViewModel) {
-    val pager = rememberPagerState(initialPage = state.space.ordinal, pageCount = { 3 })
-    val scope = rememberCoroutineScope()
+internal fun HomeScreen(uiState: State<HomeState>, vm: HypochloriteViewModel) {
+    val searchOpen by remember(uiState) { uiState.slice { it.searchOpen } }
+    val space by remember(uiState) { uiState.slice { it.space } }
+    val pager = rememberPagerState(initialPage = space.ordinal, pageCount = { 3 })
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val searchFocusRequester = remember { FocusRequester() }
@@ -81,27 +87,27 @@ internal fun HomeScreen(state: HomeState, vm: HypochloriteViewModel) {
     }
 
     val toggleSearch: () -> Unit = {
-        if (state.searchOpen) {
+        if (searchOpen) {
             closeSearch()
         } else {
             vm.setSearchOpen(true)
         }
     }
 
-    LaunchedEffect(state.searchOpen) {
-        if (!state.searchOpen) {
+    LaunchedEffect(searchOpen) {
+        if (!searchOpen) {
             searchFocused = false
             focusManager.clearFocus()
             keyboardController?.hide()
         }
     }
 
-    BackHandler(enabled = state.searchOpen || searchFocused) { closeSearch() }
+    BackHandler(enabled = searchOpen || searchFocused) { closeSearch() }
 
     // 顶栏 ExpandingSearch 提到 AnimatedContent 外：home→search 时 SEARCH chip 原地拉长，
     // 关闭时再缩回；AnimatedContent 只换下方内容（页签/结果 ↔ 空间页签/列表）。
-    LaunchedEffect(state.searchOpen) {
-        if (state.searchOpen) {
+    LaunchedEffect(searchOpen) {
+        if (searchOpen) {
             delay(32)
             runCatching { searchFocusRequester.requestFocus() }
         }
@@ -109,7 +115,7 @@ internal fun HomeScreen(state: HomeState, vm: HypochloriteViewModel) {
 
     Column(Modifier.fillMaxSize()) {
         Header(
-            state = state,
+            uiState = uiState,
             vm = vm,
             onToggleSearch = toggleSearch,
             onCloseSearch = closeSearch,
@@ -118,7 +124,7 @@ internal fun HomeScreen(state: HomeState, vm: HypochloriteViewModel) {
         )
         Hairline(Modifier.padding(horizontal = 14.dp))
         AnimatedContent(
-            targetState = state.searchOpen,
+            targetState = searchOpen,
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
@@ -137,7 +143,7 @@ internal fun HomeScreen(state: HomeState, vm: HypochloriteViewModel) {
             Box(Modifier.fillMaxSize()) {
                 if (open) {
                     SearchSurface(
-                        state = state,
+                        uiState = uiState,
                         vm = vm,
                         focusRequester = searchFocusRequester,
                         onFocus = { searchFocused = it },
@@ -146,51 +152,59 @@ internal fun HomeScreen(state: HomeState, vm: HypochloriteViewModel) {
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
-                    Column(Modifier.fillMaxSize()) {
-                        SpaceTabs(
-                            selected = pager.currentPage,
-                            onSelect = { page ->
-                                scope.launch { pager.animateScrollToPage(page) }
-                            },
-                        )
-                        HorizontalPager(
-                            state = pager,
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth(),
-                        ) { page ->
-                            when (page) {
-                                0 -> PlaylistFlow(state.liked, state.loading, state.loggedIn, vm)
-                                1 -> PlaylistFlow(state.mine, state.loading, state.loggedIn, vm)
-                                else -> DailyFlow(
-                                    playlists = state.dailyPlaylists,
-                                    songs = state.dailySongs,
-                                    loading = state.loading,
-                                    loggedIn = state.loggedIn,
-                                    currentId = state.player.current?.id,
-                                    likedIds = state.likedSongIds,
-                                    inRoom = state.listen.room != null,
-                                    vm = vm,
-                                )
-                            }
-                        }
-                    }
+                    HomeLibrary(uiState, vm, pager)
                 }
             }
         }
-        MiniBar(state, vm)
+        MiniBar(uiState, vm)
+    }
+}
+
+@Composable
+private fun HomeLibrary(uiState: State<HomeState>, vm: HypochloriteViewModel, pager: PagerState) {
+    val state by remember(uiState) { uiState.slice(HomeState::homeLibraryUi) }
+    val scope = rememberCoroutineScope()
+    Column(Modifier.fillMaxSize()) {
+        SpaceTabs(
+            selected = pager.currentPage,
+            onSelect = { page ->
+                scope.launch { pager.animateScrollToPage(page) }
+            },
+        )
+        HorizontalPager(
+            state = pager,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+        ) { page ->
+            when (page) {
+                0 -> PlaylistFlow(state.liked, state.loading, state.loggedIn, vm)
+                1 -> PlaylistFlow(state.mine, state.loading, state.loggedIn, vm)
+                else -> DailyFlow(
+                    playlists = state.dailyPlaylists,
+                    songs = state.dailySongs,
+                    loading = state.loading,
+                    loggedIn = state.loggedIn,
+                    currentId = state.currentId,
+                    likedIds = state.likedSongIds,
+                    inRoom = state.inRoom,
+                    vm = vm,
+                )
+            }
+        }
     }
 }
 
 @Composable
 private fun Header(
-    state: HomeState,
+    uiState: State<HomeState>,
     vm: HypochloriteViewModel,
     onToggleSearch: () -> Unit,
     onCloseSearch: () -> Unit,
     searchFocusRequester: FocusRequester,
     onSearchFocus: (Boolean) -> Unit,
 ) {
+    val state by remember(uiState) { uiState.slice(HomeState::homeHeaderUi) }
     val colors = LocalHypochloriteColors.current
     val keyboardController = LocalSoftwareKeyboardController.current
     Row(
@@ -256,7 +270,7 @@ private fun Header(
         // 在房间里时这个图标常亮，点进去能看到房间和成员
         MiniIconButton(onClick = { vm.openListen() }) {
             TogetherIcon(
-                color = if (state.listen.connected) colors.accent else colors.text,
+                color = if (state.connected) colors.accent else colors.text,
                 size = 17.dp,
             )
         }

@@ -31,7 +31,6 @@ import app.hypochlorite.ui.screens.HomeScreen
 import app.hypochlorite.ui.screens.ListenTogetherScreen
 import app.hypochlorite.ui.screens.LoginScreen
 import app.hypochlorite.ui.screens.NowPlayingScreen
-import app.hypochlorite.ui.screens.NowPlayingUi
 import app.hypochlorite.ui.screens.PlaylistScreen
 import app.hypochlorite.ui.sheets.ListenToast
 import app.hypochlorite.ui.sheets.LoginVerifyOverlay
@@ -120,16 +119,20 @@ private fun RouteHost(uiState: State<HomeState>, vm: HypochloriteViewModel) {
 
 @Composable
 private fun RoutePage(route: Route, uiState: State<HomeState>, vm: HypochloriteViewModel) {
+    if (route == Route.Home || route == Route.NowPlaying || route == Route.Roam) {
+        HomeScreen(uiState, vm)
+        return
+    }
     val state = uiState.value
     when (route) {
-        Route.Home -> HomeScreen(state, vm)
+        Route.Home -> Unit
         is Route.PlaylistSongs -> PlaylistScreen(route.playlist, state, vm)
         is Route.ArtistDetail -> ArtistScreen(route.artistName, state, vm)
         is Route.AlbumDetail -> AlbumScreen(route.albumName, route.albumId, state, vm)
         Route.Login -> LoginScreen(state, vm)
         Route.Config -> ConfigScreen(state, vm)
         Route.ListenTogether -> ListenTogetherScreen(state, vm)
-        Route.NowPlaying, Route.Roam -> HomeScreen(state, vm)
+        Route.NowPlaying, Route.Roam -> Unit
     }
 }
 
@@ -137,22 +140,8 @@ private fun RoutePage(route: Route, uiState: State<HomeState>, vm: HypochloriteV
 private fun NowPlayingHost(uiState: State<HomeState>, vm: HypochloriteViewModel) {
     val open by remember(uiState) { derivedStateOf { uiState.value.nowPlayingOpen } }
     if (!open) return
-    val s = uiState.value
-    NowPlayingScreen(
-        NowPlayingUi(
-            player = s.player,
-            reveal = s.reveal,
-            backdropCoverUrl = s.backdropCoverUrl,
-            monetEnabled = s.monetEnabled,
-            palette = s.palette,
-            songTransitionDir = s.songTransitionDir,
-            songTransitionSeq = s.songTransitionSeq,
-            route = s.route,
-            likedSongIds = s.likedSongIds,
-            playlistSongs = s.playlistSongs,
-        ),
-        vm,
-    )
+    val state by remember(uiState) { uiState.slice(HomeState::nowPlayingUi) }
+    NowPlayingScreen(state, vm)
 }
 
 @Composable
@@ -161,7 +150,8 @@ private fun QueueHost(uiState: State<HomeState>, vm: HypochloriteViewModel) {
     if (!open) return
     // 播放列表（队列管理）：盖在详情页之上 —— 从详情页的控制行点队列图标唤起，
     // 详情页留在原地，收掉面板就回到详情页（网易云的层级关系）
-    PlayQueuePanel(uiState.value.player, vm)
+    val queue by remember(uiState) { uiState.slice(HomeState::queueUi) }
+    PlayQueuePanel(queue, vm)
 }
 
 @Composable

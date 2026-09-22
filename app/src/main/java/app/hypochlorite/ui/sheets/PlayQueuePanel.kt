@@ -46,7 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import app.hypochlorite.HypochloriteViewModel
 import app.hypochlorite.netease.Song
-import app.hypochlorite.player.PlayerSnapshot
+import app.hypochlorite.ui.QueueUi
 import app.hypochlorite.ui.BackArrowIcon
 import app.hypochlorite.ui.Hairline
 import app.hypochlorite.ui.MiniIconButton
@@ -67,7 +67,7 @@ import kotlinx.coroutines.launch
  * 数据源就是 [PlayerSnapshot.queue]，没有任何本地副本可失步。
  */
 @Composable
-internal fun PlayQueuePanel(player: PlayerSnapshot, vm: HypochloriteViewModel) {
+internal fun PlayQueuePanel(player: QueueUi, vm: HypochloriteViewModel) {
     val colors = LocalHypochloriteColors.current
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
@@ -211,7 +211,7 @@ private fun QueueTab(label: String, selected: Boolean, onClick: () -> Unit) {
  * 松手即定。拖动中的那一行浮起来（投影 + 跟手位移）。
  */
 @Composable
-private fun ColumnScope.QueueTabList(player: PlayerSnapshot, vm: HypochloriteViewModel) {
+private fun ColumnScope.QueueTabList(player: QueueUi, vm: HypochloriteViewModel) {
     val density = LocalDensity.current
     val rowHpx = with(density) { SongRowHeight.toPx() }
     val queue = player.queue
@@ -335,7 +335,7 @@ private fun QueueRow(
 
 /** 历史页签：最近播过的歌，点一下加回队列并播放。 */
 @Composable
-private fun ColumnScope.HistoryTabList(player: PlayerSnapshot, vm: HypochloriteViewModel) {
+private fun ColumnScope.HistoryTabList(player: QueueUi, vm: HypochloriteViewModel) {
     val history = player.history
     if (history.isEmpty()) {
         MonoText("还没有播放历史", muted = true, modifier = Modifier.padding(start = 14.dp, top = 18.dp))

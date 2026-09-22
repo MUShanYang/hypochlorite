@@ -29,6 +29,7 @@ import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -65,6 +66,9 @@ import app.hypochlorite.ui.PlaylistRow
 import app.hypochlorite.ui.SettingsIcon
 import app.hypochlorite.ui.SongRow
 import app.hypochlorite.ui.TogetherIcon
+import app.hypochlorite.ui.slice
+import app.hypochlorite.ui.homeHeaderUi
+import app.hypochlorite.ui.searchResultsUi
 import app.hypochlorite.ui.clickableNoRipple
 import app.hypochlorite.ui.theme.LocalHypochloriteColors
 import java.time.Instant
@@ -87,7 +91,7 @@ private val SearchLabels = listOf("[综合]", "[单曲]", "[歌单]", "[专辑]"
 
 @Composable
 internal fun SearchSurface(
-    state: HomeState,
+    uiState: State<HomeState>,
     vm: HypochloriteViewModel,
     focusRequester: FocusRequester,
     onFocus: (Boolean) -> Unit,
@@ -115,7 +119,7 @@ internal fun SearchSurface(
     Column(modifier.fillMaxSize()) {
         if (includeHeader) {
             SearchHeader(
-                state = state,
+                uiState = uiState,
                 vm = vm,
                 focusRequester = focusRequester,
                 onFocus = onFocus,
@@ -138,76 +142,89 @@ internal fun SearchSurface(
             state = pager,
             modifier = Modifier.weight(1f),
         ) { page ->
-            val found = state.search
-            val query = state.searchQuery
-            val currentId = state.player.current?.id
-            val likedIds = state.likedSongIds
-            val inRoom = state.listen.room != null
-            when (SearchTab.entries[page]) {
-                SearchTab.All -> Comprehensive(
-                    found = found,
-                    query = query,
-                    currentId = currentId,
-                    likedIds = likedIds,
-                    inRoom = inRoom,
-                    vm = vm,
-                ) { tab ->
-                    selectedTab = tab.ordinal
-                    scope.launch { pager.animateScrollToPage(tab.ordinal) }
-                }
-                SearchTab.Songs -> SongResults(
-                    songs = found.songs,
-                    query = query,
-                    phase = found.phase,
-                    resultQuery = found.resultQuery,
-                    currentId = currentId,
-                    likedIds = likedIds,
-                    inRoom = inRoom,
-                    moreLoading = found.moreTab == SearchTab.Songs,
-                    moreFailed = found.moreErrorTab == SearchTab.Songs,
-                    vm = vm,
-                )
-                SearchTab.Playlists -> PlaylistResults(
-                    playlists = found.playlists,
-                    query = query,
-                    phase = found.phase,
-                    resultQuery = found.resultQuery,
-                    moreLoading = found.moreTab == SearchTab.Playlists,
-                    moreFailed = found.moreErrorTab == SearchTab.Playlists,
-                    vm = vm,
-                )
-                SearchTab.Albums -> AlbumResults(
-                    albums = found.albums,
-                    query = query,
-                    phase = found.phase,
-                    resultQuery = found.resultQuery,
-                    moreLoading = found.moreTab == SearchTab.Albums,
-                    moreFailed = found.moreErrorTab == SearchTab.Albums,
-                    vm = vm,
-                )
-                SearchTab.Artists -> ArtistResults(
-                    artists = found.artists,
-                    query = query,
-                    phase = found.phase,
-                    resultQuery = found.resultQuery,
-                    moreLoading = found.moreTab == SearchTab.Artists,
-                    moreFailed = found.moreErrorTab == SearchTab.Artists,
-                    vm = vm,
-                )
+            SearchResultsPage(uiState, vm, SearchTab.entries[page]) { tab ->
+                selectedTab = tab.ordinal
+                scope.launch { pager.animateScrollToPage(tab.ordinal) }
             }
         }
     }
 }
 
 @Composable
+private fun SearchResultsPage(
+    uiState: State<HomeState>,
+    vm: HypochloriteViewModel,
+    tab: SearchTab,
+    onMore: (SearchTab) -> Unit,
+) {
+    val state by remember(uiState) { uiState.slice(HomeState::searchResultsUi) }
+    val found = state.search
+    val query = found.resultQuery
+    val currentId = state.currentId
+    val likedIds = state.likedSongIds
+    val inRoom = state.inRoom
+    when (tab) {
+        SearchTab.All -> Comprehensive(
+            found = found,
+            query = query,
+            currentId = currentId,
+            likedIds = likedIds,
+            inRoom = inRoom,
+            vm = vm,
+            onMore = onMore,
+        )
+        SearchTab.Songs -> SongResults(
+            songs = found.songs,
+            query = query,
+            phase = found.phase,
+            resultQuery = found.resultQuery,
+            currentId = currentId,
+            likedIds = likedIds,
+            inRoom = inRoom,
+            moreLoading = found.moreTab == SearchTab.Songs,
+            moreFailed = found.moreErrorTab == SearchTab.Songs,
+            vm = vm,
+        )
+        SearchTab.Playlists -> PlaylistResults(
+            playlists = found.playlists,
+            query = query,
+            phase = found.phase,
+            resultQuery = found.resultQuery,
+            moreLoading = found.moreTab == SearchTab.Playlists,
+            moreFailed = found.moreErrorTab == SearchTab.Playlists,
+            vm = vm,
+        )
+        SearchTab.Albums -> AlbumResults(
+            albums = found.albums,
+            query = query,
+            phase = found.phase,
+            resultQuery = found.resultQuery,
+            moreLoading = found.moreTab == SearchTab.Albums,
+            moreFailed = found.moreErrorTab == SearchTab.Albums,
+            vm = vm,
+        )
+        SearchTab.Artists -> ArtistResults(
+            artists = found.artists,
+            query = query,
+            phase = found.phase,
+            resultQuery = found.resultQuery,
+            moreLoading = found.moreTab == SearchTab.Artists,
+            moreFailed = found.moreErrorTab == SearchTab.Artists,
+            vm = vm,
+        )
+    }
+}
+
+@Composable
 private fun SearchHeader(
-    state: HomeState,
+    uiState: State<HomeState>,
     vm: HypochloriteViewModel,
     focusRequester: FocusRequester,
     onFocus: (Boolean) -> Unit,
     onClose: () -> Unit,
     onSearch: () -> Unit,
 ) {
+    val state by remember(uiState) { uiState.slice(HomeState::homeHeaderUi) }
     val colors = LocalHypochloriteColors.current
     Row(
         Modifier
@@ -235,7 +252,7 @@ private fun SearchHeader(
         )
         MiniIconButton(onClick = { vm.openListen() }) {
             TogetherIcon(
-                color = if (state.listen.connected) colors.accent else colors.text,
+                color = if (state.connected) colors.accent else colors.text,
                 size = 17.dp,
             )
         }
@@ -687,14 +704,14 @@ private fun ResultColumn(
     // content / restart 都是跳过键。列表正文是 lambda，播放行、加载更多这些变化必须写进参数，
     // 否则父级重组时这列会被判成「没变」而留下旧的高亮。
     val ready = hasItems && content !is Unit && restart !is Unit
-    val pending = query.isNotEmpty() && (phase == SearchPhase.Loading || resultQuery != query)
+    val pending = phase == SearchPhase.Loading || (query.isNotEmpty() && resultQuery != query)
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 20.dp),
     ) {
         when {
-            query.isEmpty() -> item { SearchNotice("输入歌名、歌手、专辑、歌单或链接") }
             pending -> item { SearchNotice("搜索中…") }
+            query.isEmpty() -> item { SearchNotice("输入歌名、歌手、专辑、歌单或链接") }
             phase == SearchPhase.Error -> item {
                 SearchNotice("搜索失败", warning = true, action = "[重试]", onAction = onRetry)
             }

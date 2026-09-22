@@ -7,6 +7,7 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +23,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -54,23 +57,36 @@ import app.hypochlorite.ui.PlayIcon
 import app.hypochlorite.ui.RoamChevrons
 import app.hypochlorite.ui.StaggerIn
 import app.hypochlorite.ui.lyricIndex
-import app.hypochlorite.ui.playerClock
 import app.hypochlorite.ui.reportMiniCoverAnchor
 import app.hypochlorite.ui.theme.BodyStyle
 import app.hypochlorite.ui.theme.HeavyBold
 import app.hypochlorite.ui.theme.LocalHypochloriteColors
+import app.hypochlorite.ui.slice
+import app.hypochlorite.ui.miniBarUi
+import app.hypochlorite.ui.MiniBarUi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 @Composable
+internal fun MiniBar(uiState: State<HomeState>, vm: HypochloriteViewModel) {
+    val state by remember(uiState) { uiState.slice(HomeState::miniBarUi) }
+    MiniBar(state, vm)
+}
+
+@Composable
 internal fun MiniBar(state: HomeState, vm: HypochloriteViewModel) {
-    // 外壳只转发底栏真正读的字段。搜索打字会重组页面，但播放器快照没变时这里整段跳过。
+    val chrome = remember(state) { state.miniBarUi() }
+    MiniBar(chrome, vm)
+}
+
+@Composable
+private fun MiniBar(state: MiniBarUi, vm: HypochloriteViewModel) {
     MiniBarChrome(
         player = state.player,
         backdropCoverUrl = state.backdropCoverUrl,
-        banner = state.palette.banner,
+        banner = state.banner,
         songTransitionDir = state.songTransitionDir,
         songTransitionSeq = state.songTransitionSeq,
         songTransitionManual = state.songTransitionManual,
@@ -476,26 +492,20 @@ private fun MiniBarChrome(
 
 @Composable
 private fun MiniProgressTrack(vm: HypochloriteViewModel) {
-    val clock = playerClock(vm)
-    val progress = if (clock.durationMs > 0) {
-        (clock.positionMs.toFloat() / clock.durationMs.toFloat()).coerceIn(0f, 1f)
-    } else 0f
+    val clock = vm.clock.collectAsStateWithLifecycle()
     val colors = LocalHypochloriteColors.current
-    Box(
+    Canvas(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp)
-            .height(1.dp)
-            .background(colors.text.copy(alpha = if (colors.isLight) 0.12f else 0.25f)),
+            .height(1.dp),
     ) {
-        if (progress > 0f) {
-            Box(
-                Modifier
-                    .fillMaxWidth(fraction = progress)
-                    .fillMaxHeight()
-                    .background(colors.text),
-            )
-        }
+        val now = clock.value
+        val progress = if (now.durationMs > 0) {
+            (now.positionMs.toFloat() / now.durationMs).coerceIn(0f, 1f)
+        } else 0f
+        drawRect(colors.text.copy(alpha = if (colors.isLight) 0.12f else 0.25f))
+        drawRect(colors.text, size = size.copy(width = size.width * progress))
     }
 }
 
