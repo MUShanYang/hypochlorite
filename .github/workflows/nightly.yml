@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: nightly-${{ github.ref }}
+  group: nightly-release
   cancel-in-progress: true
 
 permissions:
@@ -27,13 +27,14 @@ jobs:
       - name: Assemble debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
 
-      - name: Name nightly artifact
+      - name: Prepare nightly APK
         id: apk
         run: |
           short_sha="${GITHUB_SHA::7}"
           branch="${GITHUB_REF_NAME//\//-}"
           src="app/build/outputs/apk/debug/app-debug.apk"
-          out="hypochlorite-nightly-${branch}-${short_sha}.apk"
+          # Stable name so Releases always shows one obvious download.
+          out="hypochlorite-nightly.apk"
           cp "$src" "$out"
           echo "path=$out" >> "$GITHUB_OUTPUT"
           echo "title=Nightly ${branch}@${short_sha}" >> "$GITHUB_OUTPUT"
@@ -45,13 +46,27 @@ jobs:
           path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
 
-      # Rolling prerelease: every push refreshes the same "nightly" tag.
+      - name: Clear previous nightly assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Drop every old APK on the rolling nightly release so only the new file remains.
+          release_id=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/nightly" --jq .id 2>/dev/null || true)
+          if [ -n "$release_id" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets" --jq '.[].id' \
+              | while read -r asset_id; do
+                  [ -n "$asset_id" ] || continue
+                  gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+                done
+          fi
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: nightly
           name: ${{ steps.apk.outputs.title }}
           prerelease: true
           generate_release_notes: true
+          overwrite_files: true
           files: ${{ steps.apk.outputs.path }}
           body: |
             自动夜间构建（推送触发）。
@@ -59,3 +74,4 @@ jobs:
             - 分支: `${{ github.ref_name }}`
             - 提交: `${{ github.sha }}`
             - 工作流: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            - 安装包: `hypochlorite-nightly.apk`（固定文件名，每次覆盖）
