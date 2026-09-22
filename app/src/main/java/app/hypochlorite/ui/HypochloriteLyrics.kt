@@ -228,6 +228,11 @@ fun ScrollingLyricView(
     currentIndex: Int,
     modifier: Modifier = Modifier,
     onSeek: ((Long) -> Unit)? = null,
+    /**
+     * 封面↔歌词入场动画未结束前设为 false，避免首帧 `scrollToItem` 与淡入抢主线程。
+     * 变为 true 后本 effect 会再跑一遍，补上定位到当前句。
+     */
+    enableFollowScroll: Boolean = true,
 ) {
     if (lines.isEmpty()) {
         Box(modifier.fillMaxSize())
@@ -261,7 +266,8 @@ fun ScrollingLyricView(
         if (placed) entrance.animateTo(1f, tween(400, easing = LyricEase))
     }
 
-    LaunchedEffect(lines, currentIndex, viewportTop, viewportHeight, browsing, dragging) {
+    LaunchedEffect(lines, currentIndex, viewportTop, viewportHeight, browsing, dragging, enableFollowScroll) {
+        if (!enableFollowScroll) return@LaunchedEffect
         if (viewportHeight == 0 || viewportTop.isNaN() || browsing || dragging) return@LaunchedEffect
         val index = Lyrics.scrollTarget(currentIndex, lines.size, placed) ?: return@LaunchedEffect
         val itemIndex = index + 1 // Leading spacer allows the first line to reach the anchor.
