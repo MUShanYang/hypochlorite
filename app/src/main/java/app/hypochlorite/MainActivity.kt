@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.graphics.Color as AndroidColor
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -31,9 +32,16 @@ class MainActivity : ComponentActivity() {
             }
         }
         hideNavigationBarPill()
+        vm.offerListenInvite(intent?.dataString)
         setContent {
             HypochloriteRoot(vm)
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        vm.offerListenInvite(intent.dataString)
     }
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {

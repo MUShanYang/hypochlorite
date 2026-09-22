@@ -3,6 +3,7 @@ package app.hypochlorite.netease
 import okhttp3.OkHttpClient
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -33,7 +34,7 @@ import java.util.concurrent.TimeUnit
  * | likeSong | /api/radio/like（song/like 兜底） | weapi / eapi |
  * | manipulatePlaylistTracks | /api/playlist/manipulate/tracks | eapi |
  * | likeList | /api/song/like/get | eapi |
- * | 一起听 lt* | /api/listen/together/ 各端点 | eapi（status 走 weapi） |
+ * | 一起听 lt* | /api/listen/together/ 各端点 | eapi（status 走 weapi），客户端身份是 android 9.5.95 |
  * | getPlayerUrl | /api/song/enhance/player/url/v1 等 | eapi → weapi → api |
  *
  * 参考项目的 `/song/url/v1` 走 xeapi（需要服务端公钥握手，见 [Ncm] 头注释），
@@ -58,7 +59,17 @@ class NeteaseClient(
         crypto: String = "",
         fakeNmtid: Boolean = true,
         plainFallback: Boolean = true,
-    ): Ncm.Res = Ncm.request(http, session, uri, data, crypto, fakeNmtid, plainFallback = plainFallback)
+        identity: Ncm.ClientIdentity? = null,
+    ): Ncm.Res = Ncm.request(
+        http,
+        session,
+        uri,
+        data,
+        crypto,
+        fakeNmtid,
+        plainFallback = plainFallback,
+        identity = identity,
+    )
 
     // ------------------------------------------------------------------ 通用解析
 
@@ -109,6 +120,7 @@ class NeteaseClient(
             creatorId = creator?.opt("userId")?.toString() ?: pl.opt("userId")?.toString(),
             subscribed = pl.optBoolean("subscribed", false),
             specialType = pl.optInt("specialType", 0),
+            creatorName = creator?.optString("nickname").orEmpty(),
         )
     }
 
@@ -273,29 +285,51 @@ class NeteaseClient(
         return out
     }
 
-    fun searchSongs(query: String, limit: Int = 20): List<Song> {
-        val q = query.trim()
-        if (q.isEmpty()) return emptyList()
-        SongId.parse(q)?.let { id ->
-            getSongDetail(id)?.let { return listOf(it) }
-        }
+    /**
+     * cloudsearch。type：1 单曲，10 专辑，100 歌手，1000 歌单。
+     *
+     * 到不了网易，或者返回了没有 result 的错误码，才算失败。空列表是一次成功的搜索。
+     */
+    private fun cloudSearch(query: String, type: Int, limit: Int, offset: Int): JSONObject {
         val res = ncm(
             "/api/cloudsearch/pc",
             JSONObject()
-                .put("s", q)
-                .put("type", 1)
+                .put("s", query)
+                .put("type", type)
                 .put("limit", limit)
-                .put("offset", 0)
+                .put("offset", offset)
                 .put("total", true),
         )
-        val songs = res.json?.optJSONObject("result")?.optJSONArray("songs")
+        val json = res.json ?: throw IOException("cloudsearch unreachable")
+        if (json.optJSONObject("result") == null && json.optInt("code", 200) != 200) {
+            throw IOException("cloudsearch ${json.optInt("code")}")
+        }
+        return json
+    }
+
+    fun searchSongs(query: String, limit: Int = 20, offset: Int = 0): List<Song> =
+        searchSongPage(query, limit, offset).items
+
+    fun searchSongPage(query: String, limit: Int = 20, offset: Int = 0): SearchPage<Song> {
+        val q = query.trim()
+        if (q.isEmpty()) return SearchPage(emptyList(), 0)
+        // 歌曲链接 / 纯 id 只在第一页短路。翻页仍走关键词，避免下一页又吐回同一首。
+        if (offset == 0) {
+            SongId.parse(q)?.let { id ->
+                getSongDetail(id)?.let { return SearchPage(listOf(it), 1) }
+            }
+        }
+        val json = cloudSearch(q, type = 1, limit = limit, offset = offset)
+        val result = json.optJSONObject("result")
+        val songs = result?.optJSONArray("songs")
+        val total = if (result != null && result.has("songCount")) result.optInt("songCount") else -1
         val out = mutableListOf<Song>()
         if (songs != null) {
             for (i in 0 until minOf(songs.length(), limit)) {
                 normalizeSong(songs.optJSONObject(i))?.let { out.add(it) }
             }
         }
-        if (out.any { it.cover.isEmpty() }) {
+        if (offset == 0 && out.any { it.cover.isEmpty() }) {
             val missingIds = out.filter { it.cover.isEmpty() }.map { it.id }
             val details = runCatching { getSongDetails(missingIds) }.getOrDefault(emptyList()).associateBy { it.id }
             for (i in out.indices) {
@@ -306,29 +340,34 @@ class NeteaseClient(
                 }
             }
         }
-        return out
+        return SearchPage(out, total)
     }
 
-    fun searchPlaylists(query: String, limit: Int = 20): List<Playlist> {
+    fun searchPlaylists(query: String, limit: Int = 20, offset: Int = 0): List<Playlist> =
+        searchPlaylistPage(query, limit, offset).items
+
+    fun searchPlaylistPage(query: String, limit: Int = 20, offset: Int = 0): SearchPage<Playlist> {
         val q = query.trim()
-        if (q.isEmpty()) return emptyList()
-        val res = ncm(
-            "/api/cloudsearch/pc",
-            JSONObject()
-                .put("s", q)
-                .put("type", 1000)
-                .put("limit", limit)
-                .put("offset", 0)
-                .put("total", true),
-        )
-        val lists = res.json?.optJSONObject("result")?.optJSONArray("playlists")
-        val out = mutableListOf<Playlist>()
-        if (lists != null) {
-            for (i in 0 until minOf(lists.length(), limit)) {
-                normalizePlaylist(lists.optJSONObject(i))?.let { out.add(it) }
-            }
-        }
-        return out
+        if (q.isEmpty()) return SearchPage(emptyList(), 0)
+        return parsePlaylistSearch(cloudSearch(q, type = 1000, limit = limit, offset = offset), limit)
+    }
+
+    fun searchAlbums(query: String, limit: Int = 20, offset: Int = 0): List<Album> =
+        searchAlbumPage(query, limit, offset).items
+
+    fun searchAlbumPage(query: String, limit: Int = 20, offset: Int = 0): SearchPage<Album> {
+        val q = query.trim()
+        if (q.isEmpty()) return SearchPage(emptyList(), 0)
+        return parseAlbumSearch(cloudSearch(q, type = 10, limit = limit, offset = offset), limit)
+    }
+
+    fun searchArtists(query: String, limit: Int = 20, offset: Int = 0): List<Artist> =
+        searchArtistPage(query, limit, offset).items
+
+    fun searchArtistPage(query: String, limit: Int = 20, offset: Int = 0): SearchPage<Artist> {
+        val q = query.trim()
+        if (q.isEmpty()) return SearchPage(emptyList(), 0)
+        return parseArtistSearch(cloudSearch(q, type = 100, limit = limit, offset = offset), limit)
     }
 
     fun userPlaylists(uid: String, limit: Int = 1000): List<Playlist> {
@@ -388,30 +427,16 @@ class NeteaseClient(
         return normalizePlaylist(pl) to songs
     }
 
+    /** 打开歌手页时只要第一条。失败当成没找到，调用方再走歌名兜底。 */
     fun searchArtist(query: String): Pair<String?, String?> {
-        val q = query.trim()
-        if (q.isEmpty()) return null to null
-        val res = ncm(
-            "/api/cloudsearch/pc",
-            JSONObject().put("s", q).put("type", 100).put("limit", 1).put("offset", 0).put("total", true),
-        )
-        val first = res.json?.optJSONObject("result")?.optJSONArray("artists")?.optJSONObject(0)
-        val id = first?.opt("id")?.toString()
-        val pic = first?.optString("picUrl")?.ifEmpty { first.optString("img1v1Url") }?.ifEmpty { null }
-        return id to pic
+        val first = runCatching { searchArtistPage(query, limit = 1).items.firstOrNull() }.getOrNull()
+        return first?.id to first?.cover?.ifEmpty { null }
     }
 
+    /** 打开专辑页时只要第一条。失败当成没找到。 */
     fun searchAlbum(query: String): Pair<String?, String?> {
-        val q = query.trim()
-        if (q.isEmpty()) return null to null
-        val res = ncm(
-            "/api/cloudsearch/pc",
-            JSONObject().put("s", q).put("type", 10).put("limit", 1).put("offset", 0).put("total", true),
-        )
-        val first = res.json?.optJSONObject("result")?.optJSONArray("albums")?.optJSONObject(0)
-        val id = first?.opt("id")?.toString()
-        val pic = first?.optString("picUrl")?.ifEmpty { first.optString("blurPicUrl") }?.ifEmpty { null }
-        return id to pic
+        val first = runCatching { searchAlbumPage(query, limit = 1).items.firstOrNull() }.getOrNull()
+        return first?.id to first?.cover?.ifEmpty { null }
     }
 
     fun albumDetail(albumId: String): Pair<Album?, List<Song>> {
@@ -884,282 +909,83 @@ class NeteaseClient(
     }
 
     // ------------------------------------------------------------------ 一起听
-
-    private fun normalizeRoom(json: JSONObject?): RoomInfo? {
-        if (json == null) return null
-        val data = json.optJSONObject("data") ?: json
-        val room = data.optJSONObject("roomInfo") ?: data.optJSONObject("room") ?: data
-
-        val roomId: String? = room.opt("roomId")?.toString()?.takeIf { it != "0" && it.isNotEmpty() }
-            ?: data.opt("roomId")?.toString()?.takeIf { it != "0" && it.isNotEmpty() }
-        if (roomId == null) return null
-
-        val usersArr = room.optJSONArray("roomUsers")
-            ?: room.optJSONArray("userList")
-            ?: data.optJSONArray("roomUsers")
-        val users = mutableListOf<RoomUser>()
-        if (usersArr != null) {
-            for (i in 0 until usersArr.length()) {
-                val u = usersArr.optJSONObject(i) ?: continue
-                val id: String? = u.opt("userId")?.toString()?.takeIf { it != "0" && it.isNotEmpty() }
-                    ?: u.opt("id")?.toString()?.takeIf { it != "0" && it.isNotEmpty() }
-                if (id == null) continue
-                users.add(
-                    RoomUser(
-                        userId = id,
-                        nickname = u.optString("nickname").ifEmpty { u.optString("name") },
-                        avatarUrl = u.optString("avatarUrl").ifEmpty { u.optString("avatar") },
-                    ),
-                )
-            }
-        }
-
-        val owner: String? = room.opt("creatorId")?.toString()?.takeIf { it != "0" && it.isNotEmpty() }
-            ?: room.opt("ownerId")?.toString()?.takeIf { it != "0" && it.isNotEmpty() }
-            ?: data.opt("creatorId")?.toString()?.takeIf { it != "0" && it.isNotEmpty() }
-        val songId: String? = room.opt("songId")?.toString()?.takeIf { it != "0" && it.isNotEmpty() }
-            ?: data.opt("songId")?.toString()?.takeIf { it != "0" && it.isNotEmpty() }
-        val playStatus: String? = room.optString("playStatus").ifEmpty { data.optString("playStatus") }
-            .takeIf { it.isNotEmpty() }
-        val progress: Long = room.optLong("progress", data.optLong("progress", 0L))
-
-        return RoomInfo(
-            roomId = roomId,
-            ownerId = owner,
-            users = users,
-            songId = songId,
-            playStatus = playStatus,
-            progressMs = progress,
-        )
-    }
-
-    /**
-     * 一起听接口的失败原因。
-     *
-     * 服务端的错误码在公开资料里没有完整文档，这里**不猜**具体的数字映射 ——
-     * 各个端点的 code 用法并不一致（有的用 200 表成功、有的拿 code 当业务码）。
-     * 靠谱的做法是两条腿走路：
-     *
-     * 1. 优先读响应里自带的文案字段（`message` / `msg` / `error`）。
-     * 2. 没有文案时按 code 分档，再不行给一句笼统的「稍后再试」，绝不把裸数字丢给用户。
-     */
-    private fun ltErrorText(res: Ncm.Res, json: JSONObject?): String {
-        if (json == null) {
-            return if (res.status == 0) "网络不可用，检查下连接再试" else "网络不太顺，检查下连接再试"
-        }
-        val code: Int = json.optInt("code", res.status)
-
-        // 服务端自己给的说明最可信，直接用它
-        val raw: String = listOf("message", "msg", "error", "errMsg")
-            .firstNotNullOfOrNull { key ->
-                json.optString(key)?.trim()?.takeIf { it.isNotEmpty() && it != "null" }
-            }.orEmpty()
-        if (raw.isNotEmpty()) return translateLtMessage(raw, code)
-
-        if (res.status in 500..599) return "网易云服务器忙，稍后再试"
-        if (res.status != 200) return "网络不太顺，检查下连接再试"
-        return when (code) {
-            200 -> ""
-            301, 302 -> "登录已过期，重新登录一下"
-            250, 400, 403, 405 -> "操作太频繁了，等一下再试"
-            404, 4050 -> "房间不存在或已解散"
-            502, 503, 504 -> "网易云服务器忙，稍后再试"
-            else -> "没能完成，稍后再试"
-        }
-    }
-
-    /**
-     * 把服务端回的中文说明再翻译一层。
-     *
-     * 原始文案经常带术语（「登录态异常」「触发风控」「房间已满员，无法加入」），
-     * 这里归一到用户能直接理解的说法。没匹配到就原样返回 —— 服务端的文案
-     * 本身通常比我们的通用兜底更准确。
-     */
-    private fun translateLtMessage(raw: String, code: Int): String = when {
-        raw.contains("登录") || raw.contains("未登录") -> "登录已过期，重新登录一下"
-        raw.contains("满") -> "房间满员了，进不去"
-        raw.contains("不存在") || raw.contains("解散") || raw.contains("过期") -> "房间不存在或已解散"
-        raw.contains("风控") || raw.contains("频繁") || raw.contains("操作过快") -> "操作太频繁了，等一下再试"
-        raw.contains("权限") || raw.contains("禁止") -> "当前账号没有一起听的权限"
-        raw.contains("会员") || raw.contains("VIP") -> "这个功能需要网易云会员"
-        raw.contains("版本") -> "网易云客户端版本太低，升级后再试"
-        else -> if (code in 500..599) "网易云服务器忙，稍后再试" else raw
-    }
-
-    // 下面这些接口一律返回 `Result<T>`：成功时把数据带出来，失败时带上
-    // **翻译过的人话**。以前统一返回 null，调用方只能自己编一句
-    // 「创建房间失败」—— 房间满员、登录过期、被风控全都长得一模一样。
     //
-    // 端点与参数按参考项目 module/listentogether_*.js 对齐；
-    // 除 status 走 weapi 外全部走默认 eapi 通道，响应是网易原始 JSON。
+    // 房间协议按官方客户端：创建 / 接受邀请 / 状态 / 播放列表指令 / 播放指令 / 心跳。
+    // 全部带移动端身份（见 [Ncm.ClientIdentity]）。原始 JSON 交回引擎，
+    // 成功与解散由 [requireListenSuccess] / [isListenClosed] 判断。
 
-    /** 创建房间。 */
-    fun ltCreateRoom(): Result<RoomInfo> {
-        val res = ncm(
-            "/api/listen/together/room/create",
-            JSONObject().put("refer", "songplay_more"),
+    private fun lt(uri: String, data: JSONObject = JSONObject(), crypto: String = ""): JSONObject {
+        val res = ncm(uri, data, crypto, identity = Ncm.ClientIdentity.MOBILE)
+        if (res.status == 488 || res.json?.optInt("code") == 488) {
+            return res.json ?: JSONObject().put("code", 488)
+        }
+        return res.json ?: throw IllegalStateException(
+            if (res.status == 0) "网络不可用，检查下连接再试" else "网络不太顺，检查下连接再试",
         )
-        if (res.code != 200) {
-            return Result.failure(IllegalStateException(ltErrorText(res, res.json)))
-        }
-        val room: RoomInfo? = normalizeRoom(res.json)
-        if (room == null) return Result.failure(IllegalStateException("房间信息没拿到，稍后再试"))
-        return Result.success(room)
     }
 
-    /** 查房间。 */
-    fun ltRoomCheck(roomId: String): Result<RoomInfo> {
-        val res = ncm("/api/listen/together/room/check", JSONObject().put("roomId", roomId))
-        if (res.code != 200) {
-            return Result.failure(IllegalStateException(ltErrorText(res, res.json)))
-        }
-        val room: RoomInfo? = normalizeRoom(res.json)
-        if (room != null && room.roomId.isNotEmpty()) return Result.success(room)
-        // 有些版本 check 只返回成员列表，roomId 得自己补回去
-        return Result.success(RoomInfo(roomId = roomId, users = room?.users ?: emptyList()))
-    }
+    /** 双人房。 */
+    fun ltCreateRoom(): JSONObject = lt("/api/listen/together/room/create", duoRoomBody())
 
-    /**
-     * 当前账号所在的房间（服务端按 cookie 判断）。
-     *
-     * 返回 `Result.success(null)` 表示**确实不在任何房间**（正常状态，不是错误），
-     * 调用方据此静默清掉本地记录即可；`failure` 才是真的出问题了。
-     */
-    fun ltStatus(): Result<RoomInfo?> {
-        val res = ncm("/api/listen/together/status/get", JSONObject(), "weapi")
-        if (res.code != 200) {
-            return Result.failure(IllegalStateException(ltErrorText(res, res.json)))
-        }
-        val room: RoomInfo? = normalizeRoom(res.json)
-        if (room == null || room.roomId.isEmpty()) return Result.success(null)
-        return Result.success(room)
-    }
+    /** 多人房。当前歌曲和后面的队列在建房时就种进去。 */
+    fun ltCreateMultiRoom(songId: Long, playedMillis: Long, nextSongIds: List<Long>): JSONObject =
+        lt("/api/listen/together/multi/room/create", multiRoomBody(songId, playedMillis, nextSongIds))
 
-    /** 解散 / 退出房间。服务端即使返回非 200 也视为已退出，避免用户卡在房间里。 */
-    fun ltEndRoom(roomId: String): Boolean {
-        val res = ncm("/api/listen/together/end/v2", JSONObject().put("roomId", roomId))
-        return res.code == 200
-    }
+    /** 凭邀请进入房间。只拿房间号、不带邀请人，服务端不会把你加进去。 */
+    fun ltAccept(roomId: String, inviterId: Long): JSONObject =
+        lt("/api/listen/together/play/invitation/accept", acceptBody(roomId, inviterId))
 
-    /**
-     * 上报房间播放列表。
-     *
-     * 协议里 `playlistParam` 是一个**字符串化的 JSON**，不是嵌套对象 ——
-     * 直接 put(JSONObject) 会被序列化成对象，服务端解析失败。
-     * 结构按参考项目 module/listentogether_sync_list_command.js 对齐
-     * （anchorSongId 空串、anchorPosition -1 由参考实现定死）。
-     */
-    fun ltSyncPlaylist(roomId: String, userId: String, version: Long, trackIds: List<String>): Boolean {
-        val versionEntry = JSONObject()
-            .put("userId", userId)
-            .put("version", version)
-        val versionArr = JSONArray().put(versionEntry)
+    fun ltRoomCheck(roomId: String): JSONObject =
+        lt("/api/listen/together/room/check", JSONObject().put("roomId", roomId))
 
-        val list = JSONArray()
-        for (id in trackIds) list.put(id)
+    /** 当前账号还在不在某个房间里。走 weapi，和官方状态接口一致。 */
+    fun ltStatus(): JSONObject = lt("/api/listen/together/status/get", JSONObject(), "weapi")
 
-        val param = JSONObject()
-            .put("commandType", "REPLACE")
-            .put("version", versionArr)
-            .put("anchorSongId", "")
-            .put("anchorPosition", -1)
-            .put("randomList", list)
-            .put("displayList", list)
+    fun ltEnd(roomId: String): JSONObject =
+        lt("/api/listen/together/end/v2", JSONObject().put("roomId", roomId))
 
-        val res = ncm(
-            "/api/listen/together/sync/list/command/report",
-            JSONObject()
-                .put("roomId", roomId)
-                .put("playlistParam", param.toString()),
-        )
-        return res.code == 200
-    }
-
-    /** 取房间当前播放列表的歌曲 id。 */
-    fun ltRoomPlaylist(roomId: String): List<String> {
-        val res = ncm("/api/listen/together/sync/playlist/get", JSONObject().put("roomId", roomId))
-        if (res.code != 200) return emptyList()
-
-        val data = res.json?.optJSONObject("data") ?: res.json
-        var arr = data?.optJSONArray("displayList")
-        if (arr == null || arr.length() == 0) arr = data?.optJSONArray("randomList")
-        if (arr == null || arr.length() == 0) arr = data?.optJSONArray("playlist")
-        val out = mutableListOf<String>()
-        if (arr != null) {
-            for (i in 0 until arr.length()) {
-                val item = arr.opt(i)
-                val id: String? = when (item) {
-                    is JSONObject -> item.opt("id")?.toString() ?: item.opt("songId")?.toString()
-                    null -> null
-                    else -> item.toString()
-                }
-                if (!id.isNullOrEmpty() && id != "0") out.add(id)
-            }
-        }
-        return out
-    }
-
-    /**
-     * 上报播放指令。
-     *
-     * [commandType] 取值 `PLAY` / `PAUSE` / `GOTO` / `seek`。
-     * `commandInfo` 同样是字符串化 JSON（按参考项目 play/command 模块的结构）。
-     */
-    fun ltPlayCommand(
-        roomId: String,
-        commandType: String,
-        progressMs: Long,
-        playStatus: String,
-        formerSongId: String,
-        targetSongId: String,
-        clientSeq: Long,
-    ): Boolean {
-        val info = JSONObject()
-            .put("commandType", commandType)
-            .put("progress", progressMs)
-            .put("playStatus", playStatus)
-            .put("formerSongId", formerSongId)
-            .put("targetSongId", targetSongId)
-            .put("clientSeq", clientSeq)
-
-        val res = ncm(
-            "/api/listen/together/play/command/report",
-            JSONObject()
-                .put("roomId", roomId)
-                .put("commandInfo", info.toString()),
-        )
-        return res.code == 200
-    }
-
-    /**
-     * 心跳。响应里带回房间的当前状态，是这套协议里唯一的「读数」手段。
-     * 返回 null 表示心跳失败（房间已散 / 网络异常）。
-     */
-    fun ltHeartbeat(roomId: String, songId: String, playStatus: String, progressMs: Long): RoomInfo? {
-        val res = ncm(
+    fun ltHeartbeat(roomId: String, songId: Long, playStatus: String, progressMillis: Long): JSONObject =
+        lt(
             "/api/listen/together/heartbeat",
             JSONObject()
                 .put("roomId", roomId)
-                .put("songId", songId)
+                .put("songId", songId.toString())
                 .put("playStatus", playStatus)
-                .put("progress", progressMs),
+                .put("progress", progressMillis.coerceAtLeast(0L).toString()),
         )
-        if (res.code != 200) return null
 
-        val room = normalizeRoom(res.json)
-        if (room != null) return room
+    fun ltPlayCommand(
+        roomId: String,
+        commandType: String,
+        progressMillis: Long,
+        playStatus: String,
+        formerSongId: Long,
+        targetSongId: Long,
+        clientSeq: Long,
+    ): JSONObject = lt(
+        "/api/listen/together/play/command/report",
+        JSONObject()
+            .put("roomId", roomId)
+            .put(
+                "commandInfo",
+                playCommandInfo(commandType, progressMillis, playStatus, formerSongId, targetSongId, clientSeq),
+            ),
+    )
 
-        // 心跳响应常常只有播放信息、没有 roomId，自己补
-        val data = res.json?.optJSONObject("data") ?: res.json
-        val sid: String? = data?.opt("songId")?.toString()?.takeIf { it != "0" && it.isNotEmpty() }
-        val ps: String? = data?.optString("playStatus")?.takeIf { it.isNotEmpty() }
-        return RoomInfo(
-            roomId = roomId,
-            songId = sid,
-            playStatus = ps,
-            progressMs = data?.optLong("progress", 0L) ?: 0L,
-        )
-    }
+    fun ltSyncPlaylist(
+        roomId: String,
+        versions: List<ListenPlaylistVersion>,
+        playMode: String,
+        displayIds: List<Long>,
+    ): JSONObject = lt(
+        "/api/listen/together/sync/list/command/report",
+        JSONObject()
+            .put("roomId", roomId)
+            .put("playlistParam", playlistParam("REPLACE", versions, playMode, displayIds)),
+    )
+
+    fun ltPlaylist(roomId: String): JSONObject =
+        lt("/api/listen/together/sync/playlist/get", JSONObject().put("roomId", roomId))
 
     companion object {
         fun defaultHttp(): OkHttpClient =

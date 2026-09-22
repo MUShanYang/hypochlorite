@@ -26,6 +26,20 @@ data class Album(
     val description: String = "",
 )
 
+/**
+ * 搜索命中的歌手。
+ *
+ * cloudsearch 的歌手对象不带粉丝数，综合页只展示曲目数和专辑数。
+ */
+data class Artist(
+    val id: String,
+    val name: String,
+    val cover: String = "",
+    val alias: String = "",
+    val musicSize: Int = 0,
+    val albumSize: Int = 0,
+)
+
 data class Playlist(
     val id: String,
     val name: String,
@@ -34,6 +48,7 @@ data class Playlist(
     val creatorId: String? = null,
     val subscribed: Boolean = false,
     val specialType: Int = 0,
+    val creatorName: String = "",
 )
 
 data class Profile(
@@ -79,12 +94,13 @@ data class RoomUser(
 /**
  * 一起听房间快照。
  *
- * [roomId] 是唯一的关键标识；[ownerId] 用来判断当前用户是不是房主（房主才发播放指令，
- * 房主退出时房间会散）。
+ * [roomId] 是不透明的房间号。[inviterId] 是邀请链接上的那个人，一般就是房主。
+ * [ownerId] 用来在成员列表里标出房主。
  */
 data class RoomInfo(
     val roomId: String,
     val ownerId: String? = null,
+    val inviterId: String? = null,
     val users: List<RoomUser> = emptyList(),
     val songId: String? = null,
     val playStatus: String? = null,
@@ -92,14 +108,3 @@ data class RoomInfo(
 ) {
     val memberCount: Int get() = users.size
 }
-
-/**
- * 房间的播放状态。[playStatus] 是网易云的原始字符串（PLAY / PAUSE），
- * 内部一律换算成 [playing] 这个布尔，避免在 UI 层到处比字符串。
- */
-data class RoomPlayback(
-    val songId: String? = null,
-    val playing: Boolean = false,
-    val progressMs: Long = 0L,
-    val seq: Long = 0L,
-)

@@ -16,10 +16,15 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import app.hypochlorite.netease.Crypto
 import app.hypochlorite.netease.Album
+import app.hypochlorite.netease.Artist
+import app.hypochlorite.netease.Crypto
+import app.hypochlorite.netease.ListenRoomKind
+import app.hypochlorite.netease.listenCanDropQueueTo
 import app.hypochlorite.netease.Playlist
+import app.hypochlorite.netease.SearchPage
 import app.hypochlorite.netease.Song
+import app.hypochlorite.netease.parseListenInvite
 import app.hypochlorite.player.ListenTogetherState
 import app.hypochlorite.player.PlaybackService
 import app.hypochlorite.player.PlayerSnapshot
@@ -38,8 +43,11 @@ import coil.request.SuccessResult
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -66,8 +74,54 @@ enum class ThemeMode(val id: String, val label: String) {
 
 enum class Space { Liked, Mine, Daily }
 
+/** 综合搜索的页签。顺序就是顶栏从左到右。 */
+enum class SearchTab { All, Songs, Playlists, Albums, Artists }
+
+enum class SearchPhase { Idle, Loading, Ready, Empty, Error }
+
+data class SearchHit<T>(
+    val items: List<T> = emptyList(),
+    val total: Int = 0,
+    val more: Boolean = false,
+    val failed: Boolean = false,
+)
+
+/**
+ * 一次综合搜索的四类结果。
+ *
+ * [resultQuery] 是这批结果对应的词。输入框里的字变了、新结果还没回来时，两者不一致，
+ * 界面不要把旧列表当成这次搜索。
+ */
+data class SearchState(
+    val phase: SearchPhase = SearchPhase.Idle,
+    val resultQuery: String = "",
+    val songs: SearchHit<Song> = SearchHit(),
+    val playlists: SearchHit<Playlist> = SearchHit(),
+    val albums: SearchHit<Album> = SearchHit(),
+    val artists: SearchHit<Artist> = SearchHit(),
+    val moreTab: SearchTab? = null,
+    /** 最近一次「加载更多」失败的页签。别的页签不要跟着显示失败。 */
+    val moreErrorTab: SearchTab? = null,
+)
+
+private data class SearchBundle(
+    val songs: Result<SearchPage<Song>>,
+    val playlists: Result<SearchPage<Playlist>>,
+    val albums: Result<SearchPage<Album>>,
+    val artists: Result<SearchPage<Artist>>,
+)
+
 /** 漫游过渡动画的正常时长约 1.2s，超过这个值一定是卡住了 */
 private const val ROAM_TRANSITION_TIMEOUT_MS = 2500L
+
+/** 综合搜索一次拉一页，滑到底再要下一页。 */
+private const val SEARCH_PAGE = 20
+
+/** 再往下翻也不超过这个数，避免总数缺失时一直请求。 */
+private const val SEARCH_CAP = 200
+
+/** 输入停一下再打四次 cloudsearch。 */
+private const val SEARCH_DEBOUNCE_MS = 280L
 
 /**
  * USB 音频设备的热插拔轮询间隔。
@@ -197,9 +251,7 @@ data class HomeState(
     val dailySongs: List<Song> = emptyList(),
     val searchOpen: Boolean = false,
     val searchQuery: String = "",
-    val searchPlaylists: List<Playlist> = emptyList(),
-    val searchSongs: List<Song> = emptyList(),
-    val searchMsg: String = "",
+    val search: SearchState = SearchState(),
     val playlistSongs: List<Song> = emptyList(),
     val artistSongs: List<Song> = emptyList(),
     val artistCover: String? = null,
@@ -315,6 +367,9 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
 
     private var qrPoll: Job? = null
     private var qrKey: String? = null
+    private var searchJob: Job? = null
+    private var searchMoreJob: Job? = null
+    private var searchGen = 0
     private var smsCountdown: Job? = null
     private var loginCooldownJob: Job? = null
     private val stack = ArrayDeque<Route>()
@@ -447,18 +502,36 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
 
     fun setListenInput(s: String) = _ui.update { it.copy(listenInput = s) }
 
-    fun listenCreateRoom() = app.listen.createRoom()
+    fun listenCreateRoom(kind: ListenRoomKind = ListenRoomKind.Duo) = app.listen.createRoom(kind)
 
     fun listenJoinRoom(id: String = _ui.value.listenInput) {
-        app.listen.joinRoom(id)
-        _ui.update { it.copy(listenInput = "") }
+        app.listen.join(id)
+    }
+
+    /** 从分享链接进来。认不出邀请就当普通打开，不打断正在看的页面。 */
+    fun offerListenInvite(raw: String?) {
+        if (raw.isNullOrBlank() || parseListenInvite(raw) == null) return
+        openListen()
+        app.listen.join(raw)
     }
 
     fun listenLeaveRoom() {
         app.listen.leaveRoom()
-        // 房间散了就不该停在房间页 —— 留在那会显示一个空房间
-        if (_ui.value.route == Route.ListenTogether) back()
     }
+
+    /**
+     * 房间已经没了，才离开房间页。
+     * 退出请求还在飞、或者失败了，就留在这页，错误文案才看得见。
+     */
+    fun dismissListenScreen() {
+        if (_ui.value.route != Route.ListenTogether) return
+        val prev = stack.removeLastOrNull() ?: Route.Home
+        _ui.update { it.copy(route = prev, roamAnimating = false) }
+    }
+
+    fun listenNote(message: String) = app.listen.note(message)
+
+    fun listenNotify(message: String) = app.listen.notify(message)
 
     /** 在任意歌曲列表里长按 → 把这首歌加进房间队列（不切歌）。 */
     fun listenPushSong(song: Song) = app.listen.addSongToRoomQueue(song)
@@ -777,29 +850,195 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
 
     fun setSpace(space: Space) = _ui.update { it.copy(space = space) }
 
-    fun setSearchOpen(open: Boolean) = _ui.update { it.copy(searchOpen = open) }
-
-    fun toggleSearch() = _ui.update { it.copy(searchOpen = !it.searchOpen) }
-
-    fun setSearchQuery(q: String) = _ui.update { it.copy(searchQuery = q) }
-
-    fun search() {
-        val q = _ui.value.searchQuery.trim()
-        if (q.isEmpty()) {
-            _ui.update { it.copy(searchMsg = "输入歌名或链接") }
+    fun setSearchOpen(open: Boolean) {
+        if (!open) {
+            searchJob?.cancel()
+            searchMoreJob?.cancel()
+            searchGen++
+            _ui.update { it.copy(searchOpen = false, search = it.search.copy(moreTab = null)) }
             return
         }
-        viewModelScope.launch {
-            _ui.update { it.copy(searchMsg = "搜索中…", searchOpen = true) }
-            val playlists = withContext(Dispatchers.IO) { runCatching { app.client.searchPlaylists(q) }.getOrDefault(emptyList()) }
-            val songs = withContext(Dispatchers.IO) { runCatching { app.client.searchSongs(q) }.getOrDefault(emptyList()) }
+        _ui.update { it.copy(searchOpen = true) }
+        val snap = _ui.value
+        val q = snap.searchQuery.trim()
+        val settled = snap.search.resultQuery == q &&
+            snap.search.phase != SearchPhase.Loading &&
+            snap.search.phase != SearchPhase.Idle
+        if (q.isNotEmpty() && !settled) scheduleSearch(immediate = true)
+    }
+
+    fun toggleSearch() = setSearchOpen(!_ui.value.searchOpen)
+
+    fun setSearchQuery(q: String) {
+        _ui.update { it.copy(searchQuery = q) }
+        scheduleSearch(immediate = false)
+    }
+
+    fun search() = scheduleSearch(immediate = true)
+
+    fun searchLoadMore(tab: SearchTab) {
+        if (tab == SearchTab.All) return
+        val snap = _ui.value
+        val q = snap.searchQuery.trim()
+        val search = snap.search
+        if (q.isEmpty() || search.resultQuery != q) return
+        if (search.phase != SearchPhase.Ready) return
+        if (search.moreTab != null) return
+        val hit = search.hit(tab)
+        if (!hit.more || hit.items.size >= SEARCH_CAP) return
+        val start = hit.items.size
+        val gen = searchGen
+        searchMoreJob?.cancel()
+        searchMoreJob = viewModelScope.launch {
+            _ui.update { it.copy(search = it.search.copy(moreTab = tab, moreErrorTab = null)) }
+            when (tab) {
+                SearchTab.Songs -> applyMore(gen, q, tab, loadPage { app.client.searchSongPage(q, SEARCH_PAGE, start) }) { current, page ->
+                    current.copy(songs = current.songs.merged(page) { it.id })
+                }
+                SearchTab.Playlists -> applyMore(gen, q, tab, loadPage { app.client.searchPlaylistPage(q, SEARCH_PAGE, start) }) { current, page ->
+                    current.copy(playlists = current.playlists.merged(page) { it.id })
+                }
+                SearchTab.Albums -> applyMore(gen, q, tab, loadPage { app.client.searchAlbumPage(q, SEARCH_PAGE, start) }) { current, page ->
+                    current.copy(albums = current.albums.merged(page) { it.id })
+                }
+                SearchTab.Artists -> applyMore(gen, q, tab, loadPage { app.client.searchArtistPage(q, SEARCH_PAGE, start) }) { current, page ->
+                    current.copy(artists = current.artists.merged(page) { it.id })
+                }
+                SearchTab.All -> Unit
+            }
+        }
+    }
+
+    private suspend fun <T> loadPage(block: () -> SearchPage<T>): Result<SearchPage<T>> =
+        withContext(Dispatchers.IO) { catchSearch(block) }
+
+    private fun <T> applyMore(
+        gen: Int,
+        query: String,
+        tab: SearchTab,
+        page: Result<SearchPage<T>>,
+        merge: (SearchState, SearchPage<T>) -> SearchState,
+    ) {
+        if (gen != searchGen) return
+        _ui.update { state ->
+            if (state.searchQuery.trim() != query) return@update state
+            val next = if (page.isFailure) {
+                state.search.copy(moreErrorTab = tab, moreTab = null)
+            } else {
+                merge(state.search, page.getOrThrow()).copy(moreTab = null, moreErrorTab = null)
+            }
+            state.copy(search = next)
+        }
+    }
+
+    private fun scheduleSearch(immediate: Boolean) {
+        val q = _ui.value.searchQuery.trim()
+        searchJob?.cancel()
+        searchMoreJob?.cancel()
+        val gen = ++searchGen
+        if (q.isEmpty()) {
+            _ui.update { it.copy(search = SearchState()) }
+            return
+        }
+        val current = _ui.value.search
+        if (!immediate &&
+            current.resultQuery == q &&
+            current.phase != SearchPhase.Loading &&
+            current.phase != SearchPhase.Error &&
+            current.phase != SearchPhase.Idle
+        ) {
+            return
+        }
+        searchJob = viewModelScope.launch {
+            if (!immediate) delay(SEARCH_DEBOUNCE_MS)
+            if (gen != searchGen) return@launch
+            _ui.update {
+                it.copy(search = SearchState(phase = SearchPhase.Loading, resultQuery = it.search.resultQuery))
+            }
+            val loaded = withContext(Dispatchers.IO) {
+                coroutineScope {
+                    val songs = async { catchSearch { app.client.searchSongPage(q, SEARCH_PAGE) } }
+                    val playlists = async { catchSearch { app.client.searchPlaylistPage(q, SEARCH_PAGE) } }
+                    val albums = async { catchSearch { app.client.searchAlbumPage(q, SEARCH_PAGE) } }
+                    val artists = async { catchSearch { app.client.searchArtistPage(q, SEARCH_PAGE) } }
+                    SearchBundle(songs.await(), playlists.await(), albums.await(), artists.await())
+                }
+            }
+            if (gen != searchGen) return@launch
+            val songs = loaded.songs.toHit()
+            val playlists = loaded.playlists.toHit()
+            val albums = loaded.albums.toHit()
+            val artists = loaded.artists.toHit()
+            val failedAll = songs.failed && playlists.failed && albums.failed && artists.failed
+            val anyItem = songs.items.isNotEmpty() || playlists.items.isNotEmpty() ||
+                albums.items.isNotEmpty() || artists.items.isNotEmpty()
+            val phase = when {
+                failedAll -> SearchPhase.Error
+                anyItem -> SearchPhase.Ready
+                else -> SearchPhase.Empty
+            }
             _ui.update {
                 it.copy(
-                    searchPlaylists = playlists,
-                    searchSongs = songs,
-                    searchMsg = if (playlists.isEmpty() && songs.isEmpty()) "没有结果" else "",
+                    search = SearchState(
+                        phase = phase,
+                        resultQuery = q,
+                        songs = songs,
+                        playlists = playlists,
+                        albums = albums,
+                        artists = artists,
+                    ),
                 )
             }
+        }
+    }
+
+    private fun SearchState.hit(tab: SearchTab): SearchHit<*> = when (tab) {
+        SearchTab.Songs -> songs
+        SearchTab.Playlists -> playlists
+        SearchTab.Albums -> albums
+        SearchTab.Artists -> artists
+        SearchTab.All -> songs
+    }
+
+    private fun <T> Result<SearchPage<T>>.toHit(): SearchHit<T> {
+        val page = getOrNull() ?: return SearchHit(failed = true)
+        return SearchHit(
+            items = page.items,
+            total = page.total,
+            more = page.items.size < SEARCH_CAP && pageHasMore(page.items.size, page.items.size, page.total),
+            failed = false,
+        )
+    }
+
+    private fun <T> SearchHit<T>.merged(page: SearchPage<T>, idOf: (T) -> String): SearchHit<T> {
+        val known = items.map(idOf).toHashSet()
+        val fresh = page.items.filter { idOf(it) !in known }
+        if (fresh.isEmpty()) {
+            return copy(more = false, total = if (page.total >= 0) page.total else total, failed = false)
+        }
+        val mergedItems = items + fresh
+        val totalNow = if (page.total >= 0) page.total else total
+        return copy(
+            items = mergedItems,
+            total = totalNow,
+            more = mergedItems.size < SEARCH_CAP && pageHasMore(mergedItems.size, page.items.size, totalNow),
+            failed = false,
+        )
+    }
+
+    private fun pageHasMore(loaded: Int, fetched: Int, total: Int): Boolean {
+        if (fetched <= 0) return false
+        if (total >= 0) return loaded < total
+        return fetched >= SEARCH_PAGE
+    }
+
+    private inline fun <T> catchSearch(block: () -> T): Result<T> {
+        return try {
+            Result.success(block())
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            Result.failure(error)
         }
     }
 
@@ -851,58 +1090,31 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
         } else {
             1
         }
-        // 在房间里点歌：**先确保它在房间队列里**，再切。
-        // 顺序反了会先切过去（此时队列里可能没这首），另一端收到 GOTO 却找不到歌。
-        if (inRoom) app.listen.addSongToRoomQueueIfMissing(song)
+        // 在房间里也是先改本机播放器。切歌会由一起听盯着播放状态上报，
+        // 对方收到的是这首歌，而不是各自再算一遍下一首。
         app.player.playSong(song)
-        if (inRoom) app.listen.broadcastGoto(song.id)
     }
 
     fun playAll(songs: List<Song>, start: Int = 0) {
         manualDirection = 1
         app.player.playAll(songs, start)
-        if (inRoom) {
-            // 整条队列换掉了 —— 房间队列必须跟着换，否则 next / 随机 两边会走岔
-            app.listen.syncQueue()
-            songs.getOrNull(start)?.let { app.listen.broadcastGoto(it.id) }
-        }
     }
 
     fun toggle() {
         app.player.toggle()
-        if (inRoom) {
-            val s = app.player.state.value
-            app.listen.broadcastToggle(playing = s.playing, positionMs = s.positionMs)
-        }
     }
 
     fun next() {
         manualDirection = 1
-        // 房间里 next 不能本地各自算 —— 两边算出的「下一首」可能不同。
-        // 走房间指令：由发起者算好目标歌广播出去，另一端跟着切。
-        if (inRoom) {
-            app.listen.broadcastNext()
-            return
-        }
         app.player.next(true)
     }
 
     fun prev(force: Boolean = false) {
         manualDirection = -1
-        if (inRoom) {
-            app.listen.broadcastPrev()
-            return
-        }
         app.player.prev(force)
     }
 
-    /**
-     * 在房间里就该把本地操作广播出去。
-     *
-     * 之前这里是 `connected && hosting`（只有房主有权），改掉了 ——
-     * 房间是共享点歌台，成员切歌同样要生效。服务端按 clientSeq 排序，最后一条赢。
-     */
-    private val inRoom: Boolean get() = _ui.value.listen.connected
+    private val inRoom: Boolean get() = _ui.value.listen.room != null
 
     fun audioLevel(): Float = app.player.audioLevel()
 
@@ -913,7 +1125,7 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
 
     fun seekMs(ms: Long) {
         app.player.seek(ms)
-        if (_ui.value.listen.connected) app.listen.broadcastSeek(ms)
+        if (inRoom) app.listen.broadcastSeek(ms)
     }
 
     fun toggleLike(song: Song? = _ui.value.player.current) {
@@ -986,7 +1198,7 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
     /**
      * 底栏长按 → 把正在播的那首歌的所在列表拉到眼前。
      *
-     * 「所在列表」怎么定：当前路由如果就是一首歌的列表（歌单 / 歌手 / 专辑 / 搜索单曲），
+     * 「所在列表」怎么定：当前路由如果就是一首歌的列表（歌单 / 歌手 / 专辑），
      * 且队列里确实有这首 —— 那就留在这个页面，只把列表滚到它那一行。否则（首页、日推、
      * 一起听房间、漫游……）退回播放队列本身：把队列灌进「正在播放」歌单页再滚过去。
      *
@@ -1042,17 +1254,33 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
     /** 点队列里的某一首：窗口里有就无缝 seek 过去，没有才重新加载 */
     fun queueJumpAt(index: Int) = app.player.jumpTo(index)
 
-    fun queueRemoveAt(index: Int) = app.player.removeFromQueue(index)
+    fun queueRemoveAt(index: Int) {
+        val after = _ui.value.player.queue.size - 1
+        if (!listenCanDropQueueTo(_ui.value.listen.room != null, after)) {
+            app.listen.notify("一起听至少留一首，空队列同步不出去")
+            return
+        }
+        app.player.removeFromQueue(index)
+    }
 
     fun queueMove(from: Int, to: Int) = app.player.moveInQueue(from, to)
 
-    fun queueClear() = app.player.clearQueue()
+    fun queueClear() {
+        if (!listenCanDropQueueTo(_ui.value.listen.room != null, 0)) {
+            app.listen.notify("一起听至少留一首，空队列同步不出去")
+            return
+        }
+        app.player.clearQueue()
+    }
 
     fun openLogin() = push(Route.Login)
 
     fun openConfig() = push(Route.Config)
 
-    fun openArtist(artistName: String) {
+    /**
+     * [knownId] 有值时不再按名字重搜。搜索结果里同名歌手不止一个，重搜会打开错的那个。
+     */
+    fun openArtist(artistName: String, knownId: String? = null, coverHint: String? = null) {
         val trimmed = artistName.trim()
         if (trimmed.isEmpty()) return
         _ui.update { it.copy(nowPlayingOpen = false) }
@@ -1062,14 +1290,18 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
                 it.copy(
                     artistLoading = true,
                     artistSongs = emptyList(),
-                    artistCover = null,
+                    artistCover = coverHint,
                     artistHasMore = false,
                     artistLoadingMore = false,
                     artistTotal = 0,
                 )
             }
-            val (artistId, artistPic) = withContext(Dispatchers.IO) {
-                runCatching { app.client.searchArtist(trimmed) }.getOrDefault(null to null)
+            val (artistId, artistPic) = if (!knownId.isNullOrEmpty()) {
+                knownId to coverHint?.takeIf { it.isNotEmpty() }
+            } else {
+                withContext(Dispatchers.IO) {
+                    runCatching { app.client.searchArtist(trimmed) }.getOrDefault(null to null)
+                }
             }
             currentArtistId = artistId
             val (songs, hasMore, total) = withContext(Dispatchers.IO) {
@@ -1540,11 +1772,13 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
 
     private fun isPhoneValid(phone: String) = phone.length == 11 && phone.startsWith("1")
 
-    /** 登录成功后的统一收尾：刷新首页数据并回到首页。 */
+    /** 登录成功后的统一收尾：刷新首页数据。若有一条还没用上的一起听邀请，回到房间页。 */
     private fun onLoggedIn() {
+        val reopenListen = app.listen.peekPending()
         refresh()
         stack.clear()
-        _ui.update { it.copy(route = Route.Home) }
+        _ui.update { it.copy(route = if (reopenListen) Route.ListenTogether else Route.Home) }
+        if (reopenListen) app.listen.onLoggedIn()
     }
 
     fun submitCookie() {
@@ -1565,21 +1799,25 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
     fun logout() {
         qrPoll?.cancel()
         smsCountdown?.cancel()
-        app.session.clear()
-        _ui.update {
-            it.copy(
-                loggedIn = false,
-                nickname = "未登录",
-                liked = emptyList(),
-                mine = emptyList(),
-                dailyPlaylists = emptyList(),
-                dailySongs = emptyList(),
-                likedSongIds = emptySet(),
-                loginMsg = "已退出",
-                phonePassword = "",
-                phoneCaptcha = "",
-                phoneCountdown = 0,
-            )
+        viewModelScope.launch {
+            app.listen.endForLogout()
+            app.session.clear()
+            _ui.update {
+                it.copy(
+                    loggedIn = false,
+                    nickname = "未登录",
+                    liked = emptyList(),
+                    mine = emptyList(),
+                    dailyPlaylists = emptyList(),
+                    dailySongs = emptyList(),
+                    likedSongIds = emptySet(),
+                    loginMsg = "已退出",
+                    phonePassword = "",
+                    phoneCaptcha = "",
+                    phoneCountdown = 0,
+                    profileUserId = null,
+                )
+            }
         }
     }
 
@@ -1625,6 +1863,8 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
             }
         }
     }
+
+    fun inviteQr(text: String): ImageBitmap = makeQr(text)
 
     private fun makeQr(text: String, size: Int = 168): ImageBitmap {
         val writer = QRCodeWriter()
