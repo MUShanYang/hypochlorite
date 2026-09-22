@@ -3,6 +3,13 @@
 package app.hypochlorite.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -88,38 +95,57 @@ internal fun HomeScreen(state: HomeState, vm: HypochloriteViewModel) {
     BackHandler(enabled = state.searchOpen || searchFocused) { closeSearch() }
 
     Column(Modifier.fillMaxSize()) {
-        if (state.searchOpen) {
-            SearchSurface(
-                state = state,
-                vm = vm,
-                focusRequester = searchFocusRequester,
-                onFocus = { searchFocused = it },
-                onClose = closeSearch,
-                modifier = Modifier.weight(1f),
-            )
-        } else {
-            Header(
-                state,
-                vm,
-                onToggleSearch = toggleSearch,
-                searchFocusRequester = searchFocusRequester,
-                onSearchFocus = { searchFocused = it },
-            )
-            Hairline(Modifier.padding(horizontal = 14.dp))
-            SpaceTabs(
-                selected = pager.currentPage,
-                onSelect = { page ->
-                    scope.launch { pager.animateScrollToPage(page) }
-                },
-            )
-            HorizontalPager(
-                state = pager,
-                modifier = Modifier.weight(1f),
-            ) { page ->
-                when (page) {
-                    0 -> PlaylistFlow(state.liked, state.loading, state.loggedIn, vm)
-                    1 -> PlaylistFlow(state.mine, state.loading, state.loggedIn, vm)
-                    else -> DailyFlow(state, vm)
+        // 搜索页 ↔ 首页内容：淡入 + 轻微水平滑入，节奏对齐 HypochloriteRoot 路由切换。
+        // MiniBar 留在动画区外，底栏不跟着抖。
+        AnimatedContent(
+            targetState = state.searchOpen,
+            modifier = Modifier.weight(1f),
+            transitionSpec = {
+                if (targetState) {
+                    (fadeIn(tween(240)) + slideInHorizontally(tween(260)) { it / 10 }) togetherWith
+                        (fadeOut(tween(180)) + slideOutHorizontally(tween(200)) { -it / 12 })
+                } else {
+                    (fadeIn(tween(220)) + slideInHorizontally(tween(240)) { -it / 12 }) togetherWith
+                        (fadeOut(tween(160)) + slideOutHorizontally(tween(180)) { it / 10 })
+                }
+            },
+            label = "homeSearch",
+        ) { open ->
+            if (open) {
+                SearchSurface(
+                    state = state,
+                    vm = vm,
+                    focusRequester = searchFocusRequester,
+                    onFocus = { searchFocused = it },
+                    onClose = closeSearch,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Column(Modifier.fillMaxSize()) {
+                    Header(
+                        state,
+                        vm,
+                        onToggleSearch = toggleSearch,
+                        searchFocusRequester = searchFocusRequester,
+                        onSearchFocus = { searchFocused = it },
+                    )
+                    Hairline(Modifier.padding(horizontal = 14.dp))
+                    SpaceTabs(
+                        selected = pager.currentPage,
+                        onSelect = { page ->
+                            scope.launch { pager.animateScrollToPage(page) }
+                        },
+                    )
+                    HorizontalPager(
+                        state = pager,
+                        modifier = Modifier.weight(1f),
+                    ) { page ->
+                        when (page) {
+                            0 -> PlaylistFlow(state.liked, state.loading, state.loggedIn, vm)
+                            1 -> PlaylistFlow(state.mine, state.loading, state.loggedIn, vm)
+                            else -> DailyFlow(state, vm)
+                        }
+                    }
                 }
             }
         }
