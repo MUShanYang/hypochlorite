@@ -224,7 +224,7 @@ private class RevealGeometry {
 /**
  * 拿宿主的 Activity。取不到就退回按节点尺寸估算，不影响波纹正确性，只是外扩量少一点。
  *
- * `internal` 而非 `private`：`HypochloriteRoot.kt` 的详情页卡面也要读它，
+ * `internal` 而非 `private`：`NowPlayingScreen.kt` 的详情页卡面也要读它，
  * 在 @Composable 层取好再传给 [monetBackdrop]（draw 阶段取不到 Context）。
  */
 internal fun Context.activityOrNull(): Activity? {
