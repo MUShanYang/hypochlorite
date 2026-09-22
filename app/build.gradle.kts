@@ -1,7 +1,15 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+}
+
+// Fixed Nightly keystore so CI debug APKs share one signature and can
+// upgrade without uninstall. Not a Play Store upload key.
+val nightlyProps = Properties().apply {
+    rootProject.file("keystore/nightly.properties").inputStream().use { load(it) }
 }
 
 android {
@@ -17,9 +25,22 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("nightly") {
+            storeFile = rootProject.file("keystore/${nightlyProps["storeFile"]}")
+            storePassword = nightlyProps["storePassword"] as String
+            keyAlias = nightlyProps["keyAlias"] as String
+            keyPassword = nightlyProps["keyPassword"] as String
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("nightly")
+        }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("nightly")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
