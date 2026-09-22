@@ -34,6 +34,7 @@ import app.hypochlorite.HomeState
 import app.hypochlorite.HypochloriteViewModel
 import app.hypochlorite.netease.Crypto
 import app.hypochlorite.netease.ListenRoomKind
+import app.hypochlorite.netease.Song
 import app.hypochlorite.player.ListenLink
 import app.hypochlorite.ui.BackArrowIcon
 import app.hypochlorite.ui.Hairline
@@ -46,7 +47,6 @@ import app.hypochlorite.ui.theme.Warn
 
 @Composable
 internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
-    val colors = LocalHypochloriteColors.current
     val context = LocalContext.current
     val lt = state.listen
     val room = lt.room
@@ -226,48 +226,11 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
                 }
             }
 
-            MonoText("房间队列", modifier = Modifier.padding(top = 28.dp))
-            Hairline(Modifier.padding(top = 8.dp))
-            MonoText(
-                "${lt.roomQueue.size} 首",
-                muted = true,
-                size = 13,
-                modifier = Modifier.padding(top = 10.dp),
+            RoomQueue(
+                queue = lt.roomQueue,
+                currentId = state.player.current?.id,
+                vm = vm,
             )
-            lt.roomQueue.take(30).forEachIndexed { i, song ->
-                val nowPlaying = state.player.current?.id == song.id
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickableNoRipple { vm.playSong(song) }
-                        .padding(vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    MonoText((i + 1).toString().padStart(2, '0'), muted = !nowPlaying, size = 12)
-                    Spacer(Modifier.width(12.dp))
-                    MonoText(
-                        song.name,
-                        bold = nowPlaying,
-                        color = if (nowPlaying) colors.accent else colors.text,
-                        maxLines = 1,
-                        marquee = true,
-                        size = 14,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (nowPlaying) {
-                        Spacer(Modifier.width(8.dp))
-                        MonoText("[播放中]", color = colors.accent, size = 11, bold = true)
-                    }
-                }
-            }
-            if (lt.roomQueue.size > 30) {
-                MonoText(
-                    "…还有 ${lt.roomQueue.size - 30} 首",
-                    muted = true,
-                    size = 12,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-            }
             
 
             lt.error?.takeIf { it.isNotEmpty() }?.let { message ->
@@ -285,6 +248,57 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
         }
 
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun RoomQueue(
+    queue: List<Song>,
+    currentId: String?,
+    vm: HypochloriteViewModel,
+) {
+    val colors = LocalHypochloriteColors.current
+    MonoText("房间队列", modifier = Modifier.padding(top = 28.dp))
+    Hairline(Modifier.padding(top = 8.dp))
+    MonoText(
+        "${queue.size} 首",
+        muted = true,
+        size = 13,
+        modifier = Modifier.padding(top = 10.dp),
+    )
+    queue.take(30).forEachIndexed { i, song ->
+        val nowPlaying = currentId == song.id
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickableNoRipple { vm.playSong(song) }
+                .padding(vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MonoText((i + 1).toString().padStart(2, '0'), muted = !nowPlaying, size = 12)
+            Spacer(Modifier.width(12.dp))
+            MonoText(
+                song.name,
+                bold = nowPlaying,
+                color = if (nowPlaying) colors.accent else colors.text,
+                maxLines = 1,
+                marquee = true,
+                size = 14,
+                modifier = Modifier.weight(1f),
+            )
+            if (nowPlaying) {
+                Spacer(Modifier.width(8.dp))
+                MonoText("[播放中]", color = colors.accent, size = 11, bold = true)
+            }
+        }
+    }
+    if (queue.size > 30) {
+        MonoText(
+            "…还有 ${queue.size - 30} 首",
+            muted = true,
+            size = 12,
+            modifier = Modifier.padding(top = 6.dp),
+        )
     }
 }
 

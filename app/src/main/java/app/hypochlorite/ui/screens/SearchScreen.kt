@@ -44,11 +44,14 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import app.hypochlorite.HomeState
 import app.hypochlorite.HypochloriteViewModel
+import app.hypochlorite.SearchHit
 import app.hypochlorite.SearchPhase
+import app.hypochlorite.SearchState
 import app.hypochlorite.SearchTab
 import app.hypochlorite.netease.Album
 import app.hypochlorite.netease.Artist
 import app.hypochlorite.netease.Playlist
+import app.hypochlorite.netease.Song
 import app.hypochlorite.ui.BackArrowIcon
 import app.hypochlorite.ui.Cover
 import app.hypochlorite.ui.ExpandingSearch
@@ -135,15 +138,62 @@ internal fun SearchSurface(
             state = pager,
             modifier = Modifier.weight(1f),
         ) { page ->
+            val found = state.search
+            val query = state.searchQuery
+            val currentId = state.player.current?.id
+            val likedIds = state.likedSongIds
+            val inRoom = state.listen.room != null
             when (SearchTab.entries[page]) {
-                SearchTab.All -> Comprehensive(state, vm) { tab ->
+                SearchTab.All -> Comprehensive(
+                    found = found,
+                    query = query,
+                    currentId = currentId,
+                    likedIds = likedIds,
+                    inRoom = inRoom,
+                    vm = vm,
+                ) { tab ->
                     selectedTab = tab.ordinal
                     scope.launch { pager.animateScrollToPage(tab.ordinal) }
                 }
-                SearchTab.Songs -> SongResults(state, vm)
-                SearchTab.Playlists -> PlaylistResults(state, vm)
-                SearchTab.Albums -> AlbumResults(state, vm)
-                SearchTab.Artists -> ArtistResults(state, vm)
+                SearchTab.Songs -> SongResults(
+                    songs = found.songs,
+                    query = query,
+                    phase = found.phase,
+                    resultQuery = found.resultQuery,
+                    currentId = currentId,
+                    likedIds = likedIds,
+                    inRoom = inRoom,
+                    moreLoading = found.moreTab == SearchTab.Songs,
+                    moreFailed = found.moreErrorTab == SearchTab.Songs,
+                    vm = vm,
+                )
+                SearchTab.Playlists -> PlaylistResults(
+                    playlists = found.playlists,
+                    query = query,
+                    phase = found.phase,
+                    resultQuery = found.resultQuery,
+                    moreLoading = found.moreTab == SearchTab.Playlists,
+                    moreFailed = found.moreErrorTab == SearchTab.Playlists,
+                    vm = vm,
+                )
+                SearchTab.Albums -> AlbumResults(
+                    albums = found.albums,
+                    query = query,
+                    phase = found.phase,
+                    resultQuery = found.resultQuery,
+                    moreLoading = found.moreTab == SearchTab.Albums,
+                    moreFailed = found.moreErrorTab == SearchTab.Albums,
+                    vm = vm,
+                )
+                SearchTab.Artists -> ArtistResults(
+                    artists = found.artists,
+                    query = query,
+                    phase = found.phase,
+                    resultQuery = found.resultQuery,
+                    moreLoading = found.moreTab == SearchTab.Artists,
+                    moreFailed = found.moreErrorTab == SearchTab.Artists,
+                    vm = vm,
+                )
             }
         }
     }
@@ -224,20 +274,22 @@ private fun SearchTabs(selected: Int, onSelect: (Int) -> Unit) {
 
 @Composable
 private fun Comprehensive(
-    state: HomeState,
+    found: SearchState,
+    query: String,
+    currentId: String?,
+    likedIds: Set<String>,
+    inRoom: Boolean,
     vm: HypochloriteViewModel,
     onMore: (SearchTab) -> Unit,
 ) {
-    val found = state.search
     val songs = found.songs
     val playlists = found.playlists
     val albums = found.albums
     val artists = found.artists
+    val trimmed = query.trim()
     val hasItems = songs.items.isNotEmpty() || playlists.items.isNotEmpty() ||
         albums.items.isNotEmpty() || artists.items.isNotEmpty()
     val anyFailed = songs.failed || playlists.failed || albums.failed || artists.failed
-    val query = state.searchQuery.trim()
-    val currentId = state.player.current?.id
     val featuredArtist = remember(artists.items) { artists.items.firstOrNull() }
     val featuredAlbum = remember(featuredArtist, albums.items) {
         if (featuredArtist == null) albums.items.firstOrNull() else null
@@ -253,9 +305,13 @@ private fun Comprehensive(
     val albumPreview = remember(albumRest) { albumRest.take(PREVIEW_REST) }
     val artistPreview = remember(artistRest) { artistRest.take(PREVIEW_REST) }
     ResultColumn(
-        state = state,
+        content = listOf(songs.items, playlists.items, albums.items, artists.items),
+        query = trimmed,
+        phase = found.phase,
+        resultQuery = found.resultQuery,
         hasItems = hasItems,
         failed = anyFailed && !hasItems,
+        restart = listOf(currentId, inRoom, likedIds),
         emptyText = "没有结果",
         onRetry = vm::search,
     ) {
@@ -309,9 +365,9 @@ private fun Comprehensive(
                     song = song,
                     onClick = { vm.playAll(songs.items, i) },
                     onLongPress = { vm.listenPushSong(song) },
-                    pushOnClick = state.listen.room != null,
+                    pushOnClick = inRoom,
                     on = currentId == song.id,
-                    isLiked = state.likedSongIds.contains(song.id),
+                    isLiked = likedIds.contains(song.id),
                     index = i,
                     highlight = query,
                     modifier = Modifier.animateItem(),
@@ -404,14 +460,27 @@ private fun Comprehensive(
 }
 
 @Composable
-private fun SongResults(state: HomeState, vm: HypochloriteViewModel) {
-    val songs = state.search.songs
-    val query = state.searchQuery.trim()
-    val currentId = state.player.current?.id
+private fun SongResults(
+    songs: SearchHit<Song>,
+    query: String,
+    phase: SearchPhase,
+    resultQuery: String,
+    currentId: String?,
+    likedIds: Set<String>,
+    inRoom: Boolean,
+    moreLoading: Boolean,
+    moreFailed: Boolean,
+    vm: HypochloriteViewModel,
+) {
+    val trimmed = query.trim()
     ResultColumn(
-        state = state,
+        content = songs.items,
+        query = trimmed,
+        phase = phase,
+        resultQuery = resultQuery,
         hasItems = songs.items.isNotEmpty(),
         failed = songs.failed,
+        restart = listOf(currentId, inRoom, likedIds, moreLoading, moreFailed),
         emptyText = "没有单曲",
         onRetry = vm::search,
     ) {
@@ -426,18 +495,18 @@ private fun SongResults(state: HomeState, vm: HypochloriteViewModel) {
                 song = song,
                 onClick = { vm.playAll(songs.items, i) },
                 onLongPress = { vm.listenPushSong(song) },
-                pushOnClick = state.listen.room != null,
+                pushOnClick = inRoom,
                 on = currentId == song.id,
-                isLiked = state.likedSongIds.contains(song.id),
+                isLiked = likedIds.contains(song.id),
                 index = i,
-                highlight = query,
+                highlight = trimmed,
                 modifier = Modifier.animateItem(),
             )
         }
         moreFooter(
             more = songs.more,
-            loading = state.search.moreTab == SearchTab.Songs,
-            failed = state.search.moreErrorTab == SearchTab.Songs,
+            loading = moreLoading,
+            failed = moreFailed,
             tab = SearchTab.Songs,
             size = songs.items.size,
             onMore = { vm.searchLoadMore(SearchTab.Songs) },
@@ -446,13 +515,24 @@ private fun SongResults(state: HomeState, vm: HypochloriteViewModel) {
 }
 
 @Composable
-private fun PlaylistResults(state: HomeState, vm: HypochloriteViewModel) {
-    val playlists = state.search.playlists
-    val query = state.searchQuery.trim()
+private fun PlaylistResults(
+    playlists: SearchHit<Playlist>,
+    query: String,
+    phase: SearchPhase,
+    resultQuery: String,
+    moreLoading: Boolean,
+    moreFailed: Boolean,
+    vm: HypochloriteViewModel,
+) {
+    val trimmed = query.trim()
     ResultColumn(
-        state = state,
+        content = playlists.items,
+        query = trimmed,
+        phase = phase,
+        resultQuery = resultQuery,
         hasItems = playlists.items.isNotEmpty(),
         failed = playlists.failed,
+        restart = moreLoading to moreFailed,
         emptyText = "没有歌单",
         onRetry = vm::search,
     ) {
@@ -470,14 +550,14 @@ private fun PlaylistResults(state: HomeState, vm: HypochloriteViewModel) {
                 onClick = { vm.openPlaylist(pl) },
                 index = i,
                 caption = playlistCaption(pl),
-                highlight = query,
+                highlight = trimmed,
                 modifier = Modifier.animateItem(),
             )
         }
         moreFooter(
             more = playlists.more,
-            loading = state.search.moreTab == SearchTab.Playlists,
-            failed = state.search.moreErrorTab == SearchTab.Playlists,
+            loading = moreLoading,
+            failed = moreFailed,
             tab = SearchTab.Playlists,
             size = playlists.items.size,
             onMore = { vm.searchLoadMore(SearchTab.Playlists) },
@@ -486,13 +566,24 @@ private fun PlaylistResults(state: HomeState, vm: HypochloriteViewModel) {
 }
 
 @Composable
-private fun AlbumResults(state: HomeState, vm: HypochloriteViewModel) {
-    val albums = state.search.albums
-    val query = state.searchQuery.trim()
+private fun AlbumResults(
+    albums: SearchHit<Album>,
+    query: String,
+    phase: SearchPhase,
+    resultQuery: String,
+    moreLoading: Boolean,
+    moreFailed: Boolean,
+    vm: HypochloriteViewModel,
+) {
+    val trimmed = query.trim()
     ResultColumn(
-        state = state,
+        content = albums.items,
+        query = trimmed,
+        phase = phase,
+        resultQuery = resultQuery,
         hasItems = albums.items.isNotEmpty(),
         failed = albums.failed,
+        restart = moreLoading to moreFailed,
         emptyText = "没有专辑",
         onRetry = vm::search,
     ) {
@@ -510,7 +601,7 @@ private fun AlbumResults(state: HomeState, vm: HypochloriteViewModel) {
                 cover = album.cover,
                 title = album.name,
                 caption = albumCaption(album),
-                query = query,
+                query = trimmed,
                 onClick = { vm.openAlbum(album.name, album.id) },
                 index = i,
                 modifier = Modifier.animateItem(),
@@ -518,8 +609,8 @@ private fun AlbumResults(state: HomeState, vm: HypochloriteViewModel) {
         }
         moreFooter(
             more = albums.more,
-            loading = state.search.moreTab == SearchTab.Albums,
-            failed = state.search.moreErrorTab == SearchTab.Albums,
+            loading = moreLoading,
+            failed = moreFailed,
             tab = SearchTab.Albums,
             size = albums.items.size,
             onMore = { vm.searchLoadMore(SearchTab.Albums) },
@@ -528,13 +619,24 @@ private fun AlbumResults(state: HomeState, vm: HypochloriteViewModel) {
 }
 
 @Composable
-private fun ArtistResults(state: HomeState, vm: HypochloriteViewModel) {
-    val artists = state.search.artists
-    val query = state.searchQuery.trim()
+private fun ArtistResults(
+    artists: SearchHit<Artist>,
+    query: String,
+    phase: SearchPhase,
+    resultQuery: String,
+    moreLoading: Boolean,
+    moreFailed: Boolean,
+    vm: HypochloriteViewModel,
+) {
+    val trimmed = query.trim()
     ResultColumn(
-        state = state,
+        content = artists.items,
+        query = trimmed,
+        phase = phase,
+        resultQuery = resultQuery,
         hasItems = artists.items.isNotEmpty(),
         failed = artists.failed,
+        restart = moreLoading to moreFailed,
         emptyText = "没有歌手",
         onRetry = vm::search,
     ) {
@@ -552,7 +654,7 @@ private fun ArtistResults(state: HomeState, vm: HypochloriteViewModel) {
                 cover = artist.cover,
                 title = artist.name,
                 caption = artistCaption(artist),
-                query = query,
+                query = trimmed,
                 onClick = { vm.openArtist(artist.name, artist.id, artist.cover) },
                 index = i,
                 modifier = Modifier.animateItem(),
@@ -560,8 +662,8 @@ private fun ArtistResults(state: HomeState, vm: HypochloriteViewModel) {
         }
         moreFooter(
             more = artists.more,
-            loading = state.search.moreTab == SearchTab.Artists,
-            failed = state.search.moreErrorTab == SearchTab.Artists,
+            loading = moreLoading,
+            failed = moreFailed,
             tab = SearchTab.Artists,
             size = artists.items.size,
             onMore = { vm.searchLoadMore(SearchTab.Artists) },
@@ -571,16 +673,21 @@ private fun ArtistResults(state: HomeState, vm: HypochloriteViewModel) {
 
 @Composable
 private fun ResultColumn(
-    state: HomeState,
+    content: Any,
+    query: String,
+    phase: SearchPhase,
+    resultQuery: String,
     hasItems: Boolean,
     failed: Boolean,
+    restart: Any,
     emptyText: String,
     onRetry: () -> Unit,
     body: LazyListScope.() -> Unit,
 ) {
-    val query = state.searchQuery.trim()
-    val found = state.search
-    val pending = query.isNotEmpty() && (found.phase == SearchPhase.Loading || found.resultQuery != query)
+    // content / restart 都是跳过键。列表正文是 lambda，播放行、加载更多这些变化必须写进参数，
+    // 否则父级重组时这列会被判成「没变」而留下旧的高亮。
+    val ready = hasItems && content !is Unit && restart !is Unit
+    val pending = query.isNotEmpty() && (phase == SearchPhase.Loading || resultQuery != query)
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 20.dp),
@@ -588,13 +695,13 @@ private fun ResultColumn(
         when {
             query.isEmpty() -> item { SearchNotice("输入歌名、歌手、专辑、歌单或链接") }
             pending -> item { SearchNotice("搜索中…") }
-            found.phase == SearchPhase.Error -> item {
+            phase == SearchPhase.Error -> item {
                 SearchNotice("搜索失败", warning = true, action = "[重试]", onAction = onRetry)
             }
-            failed && !hasItems -> item {
+            failed && !ready -> item {
                 SearchNotice("没有加载出来", warning = true, action = "[重试]", onAction = onRetry)
             }
-            !hasItems -> item { SearchNotice(emptyText) }
+            !ready -> item { SearchNotice(emptyText) }
             else -> body()
         }
     }

@@ -107,12 +107,23 @@ object Lyrics {
         return null
     }
 
-    /** Visible window: current line until the next starts; last line expires after 8s. */
+    /**
+     * Visible window: current line until the next starts; last line expires after 8s.
+     * Lines are time-sorted. Binary search keeps the 200ms clock off a linear scan.
+     */
     fun currentIndex(lines: List<LyricLine>, positionMs: Long): Int {
         if (lines.isEmpty()) return -1
+        var lo = 0
+        var hi = lines.lastIndex
         var i = -1
-        for (idx in lines.indices) {
-            if (lines[idx].timeMs <= positionMs) i = idx else break
+        while (lo <= hi) {
+            val mid = (lo + hi) ushr 1
+            if (lines[mid].timeMs <= positionMs) {
+                i = mid
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
         }
         if (i < 0) return -1
         val end = if (i + 1 < lines.size) lines[i + 1].timeMs else lines[i].timeMs + 8_000L

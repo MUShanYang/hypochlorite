@@ -856,11 +856,14 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
                 )
             }
         }.invokeOnCompletion {
-            _ui.update { it.copy(loading = false) }
+            if (_ui.value.loading) _ui.update { it.copy(loading = false) }
         }
     }
 
-    fun setSpace(space: Space) = _ui.update { it.copy(space = space) }
+    fun setSpace(space: Space) {
+        if (_ui.value.space == space) return
+        _ui.update { it.copy(space = space) }
+    }
 
     fun setSearchOpen(open: Boolean) {
         if (!open) {
@@ -882,6 +885,7 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
     fun toggleSearch() = setSearchOpen(!_ui.value.searchOpen)
 
     fun setSearchQuery(q: String) {
+        if (_ui.value.searchQuery == q) return
         _ui.update { it.copy(searchQuery = q) }
         scheduleSearch(immediate = false)
     }
@@ -1352,13 +1356,18 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
         viewModelScope.launch {
             _ui.update { it.copy(artistLoadingMore = true) }
             val offset = _ui.value.artistSongs.size
-            val (newSongs, hasMore, total) = withContext(Dispatchers.IO) {
-                runCatching { app.client.artistSongsPaged(artistId, offset = offset, limit = 100) }
-                    .getOrDefault(Triple(emptyList<Song>(), false, 0))
-            }
             val artistPic = _ui.value.artistCover
-            val mapped = newSongs.map { s ->
-                if (s.cover.isEmpty() && !artistPic.isNullOrEmpty()) s.copy(cover = artistPic) else s
+            val (mapped, hasMore, total) = withContext(Dispatchers.IO) {
+                val (list, more, tot) = runCatching {
+                    app.client.artistSongsPaged(artistId, offset = offset, limit = 100)
+                }.getOrDefault(Triple(emptyList<Song>(), false, 0))
+                Triple(
+                    list.map { s ->
+                        if (s.cover.isEmpty() && !artistPic.isNullOrEmpty()) s.copy(cover = artistPic) else s
+                    },
+                    more,
+                    tot,
+                )
             }
             _ui.update {
                 it.copy(
@@ -1886,8 +1895,19 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
-    suspend fun inviteQr(text: String): ImageBitmap? = withContext(Dispatchers.Default) {
-        runCatching { makeQr(text) }.getOrNull()
+    private val inviteQrCache = LinkedHashMap<String, ImageBitmap>(8, 0.75f, true)
+
+    suspend fun inviteQr(text: String): ImageBitmap? {
+        synchronized(inviteQrCache) { inviteQrCache[text] }?.let { return it }
+        val bmp = withContext(Dispatchers.Default) { runCatching { makeQr(text) }.getOrNull() } ?: return null
+        synchronized(inviteQrCache) {
+            inviteQrCache[text] = bmp
+            while (inviteQrCache.size > 8) {
+                val eldest = inviteQrCache.entries.firstOrNull()?.key ?: break
+                inviteQrCache.remove(eldest)
+            }
+        }
+        return bmp
     }
 
     private fun makeQr(text: String, size: Int = 168): ImageBitmap {

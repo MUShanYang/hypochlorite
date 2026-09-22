@@ -40,9 +40,11 @@ import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.Color
 import app.hypochlorite.HomeState
 import app.hypochlorite.HypochloriteViewModel
 import app.hypochlorite.netease.LyricLine
+import app.hypochlorite.player.PlayerSnapshot
 import app.hypochlorite.ui.KineticCoverFrame
 import app.hypochlorite.ui.MiniIconButton
 import app.hypochlorite.ui.MonoText
@@ -64,7 +66,31 @@ import kotlin.math.abs
 
 @Composable
 internal fun MiniBar(state: HomeState, vm: HypochloriteViewModel) {
-    val song = state.player.current
+    // 外壳只转发底栏真正读的字段。搜索打字会重组页面，但播放器快照没变时这里整段跳过。
+    MiniBarChrome(
+        player = state.player,
+        backdropCoverUrl = state.backdropCoverUrl,
+        banner = state.palette.banner,
+        songTransitionDir = state.songTransitionDir,
+        songTransitionSeq = state.songTransitionSeq,
+        songTransitionManual = state.songTransitionManual,
+        roamTransitionDir = state.roamTransitionDir,
+        vm = vm,
+    )
+}
+
+@Composable
+private fun MiniBarChrome(
+    player: PlayerSnapshot,
+    backdropCoverUrl: String?,
+    banner: Color,
+    songTransitionDir: Int,
+    songTransitionSeq: Long,
+    songTransitionManual: Boolean,
+    roamTransitionDir: Int,
+    vm: HypochloriteViewModel,
+) {
+    val song = player.current
     val artist = song?.artists?.joinToString(" / ").orEmpty()
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
@@ -78,7 +104,7 @@ internal fun MiniBar(state: HomeState, vm: HypochloriteViewModel) {
     var showFill by remember { mutableStateOf(false) }
     var swipeDir by remember { mutableIntStateOf(1) }
     var animJob by remember { mutableStateOf<Job?>(null) }
-    val isTransitioning = state.roamTransitionDir != 0
+    val isTransitioning = roamTransitionDir != 0
 
     val miniBannerOffset = remember { Animatable(0f) }
     val miniBannerDrift = remember { Animatable(0f) }
@@ -96,7 +122,7 @@ internal fun MiniBar(state: HomeState, vm: HypochloriteViewModel) {
      */
     var miniBannerPrimed by remember { mutableStateOf(false) }
 
-    LaunchedEffect(state.songTransitionSeq) {
+    LaunchedEffect(songTransitionSeq) {
         if (!miniBannerPrimed) {
             miniBannerPrimed = true
             return@LaunchedEffect
@@ -105,9 +131,9 @@ internal fun MiniBar(state: HomeState, vm: HypochloriteViewModel) {
         // 缩略图那张取色方块动画在**手动点歌时照样演**（用户 2026-09-18 明确要求），
         // 但这条**滑动的歌名横幅**只在静默换歌（自动续播、一起听同步、漫游）时才出 ——
         // 用户手动点歌时正在看着列表，再飘一条横幅过来是多余的。
-        if (state.songTransitionManual) return@LaunchedEffect
-        if (state.songTransitionSeq == 0L || song == null) return@LaunchedEffect
-        val isNext = state.songTransitionDir > 0
+        if (songTransitionManual) return@LaunchedEffect
+        if (songTransitionSeq == 0L || song == null) return@LaunchedEffect
+        val isNext = songTransitionDir > 0
         miniBannerIsNext = isNext
         miniBannerSongName = song.name
 
@@ -134,8 +160,8 @@ internal fun MiniBar(state: HomeState, vm: HypochloriteViewModel) {
         }
     }
 
-    LaunchedEffect(state.roamTransitionDir) {
-        if (state.roamTransitionDir == 0) {
+    LaunchedEffect(roamTransitionDir) {
+        if (roamTransitionDir == 0) {
             animJob?.cancel()
             showFill = false
             isDragging = false
@@ -162,9 +188,9 @@ internal fun MiniBar(state: HomeState, vm: HypochloriteViewModel) {
                 Row(
                     Modifier
                         .weight(1f)
-                        .pointerInput(state.roamTransitionDir) {
+                        .pointerInput(roamTransitionDir) {
                             awaitEachGesture {
-                                if (state.roamTransitionDir != 0) return@awaitEachGesture
+                                if (roamTransitionDir != 0) return@awaitEachGesture
                                 val down = awaitFirstDown()
                                 animJob?.cancel()
                                 var dragged = false
@@ -273,14 +299,14 @@ internal fun MiniBar(state: HomeState, vm: HypochloriteViewModel) {
                     // 用户报「底栏的那个动画的前与后你搞反了」—— 少掉的正是「色块滑入 + 缩小」那前半段，
                     // 于是「擦除方向与遮盖方向相反」在底栏没有对照物。现在与详情页同一套完整顺序。
                     // 锚点必须保留：主题扩散的起点靠它兜底。
-                    val isAudioReady = (state.player.current?.id == song?.id) &&
-                        (state.player.playable != null || state.player.playing || state.player.error != null)
+                    val isAudioReady = (player.current?.id == song?.id) &&
+                        (player.playable != null || player.playing || player.error != null)
                     KineticCoverFrame(
-                        coverUrl = song?.cover?.takeIf { it.isNotEmpty() } ?: state.backdropCoverUrl,
+                        coverUrl = song?.cover?.takeIf { it.isNotEmpty() } ?: backdropCoverUrl,
                         songId = song?.id,
-                        direction = state.songTransitionDir,
-                        transitionSeq = state.songTransitionSeq,
-                        accentColor = state.palette.banner,
+                        direction = songTransitionDir,
+                        transitionSeq = songTransitionSeq,
+                        accentColor = banner,
                         isAudioReady = isAudioReady,
                         modifier = Modifier
                             .size(32.dp)
@@ -297,7 +323,7 @@ internal fun MiniBar(state: HomeState, vm: HypochloriteViewModel) {
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                if (state.player.roam) {
+                                if (player.roam) {
                                     MonoText("[漫游] ", color = colors.accent, size = 16, bold = true)
                                 }
                                 MonoText(song?.name ?: "未在播放", maxLines = 1, marquee = true, modifier = Modifier.weight(1f, fill = false), size = 14)
@@ -307,8 +333,8 @@ internal fun MiniBar(state: HomeState, vm: HypochloriteViewModel) {
                             vm = vm,
                             songId = song?.id,
                             artist = artist,
-                            error = state.player.error,
-                            lyricLines = state.player.lyricLines,
+                            error = player.error,
+                            lyricLines = player.lyricLines,
                         )
                     }
                 }
@@ -321,7 +347,7 @@ internal fun MiniBar(state: HomeState, vm: HypochloriteViewModel) {
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     MiniIconButton(onClick = { vm.toggle() }) {
-                        if (state.player.playing) {
+                        if (player.playing) {
                             PauseIcon(size = 16.dp)
                         } else {
                             PlayIcon(size = 16.dp)
@@ -341,7 +367,7 @@ internal fun MiniBar(state: HomeState, vm: HypochloriteViewModel) {
                     .matchParentSize()
                     .clipToBounds()
             ) {
-                val currentDir = if (isTransitioning) state.roamTransitionDir else swipeDir
+                val currentDir = if (isTransitioning) roamTransitionDir else swipeDir
                 val p = if (isTransitioning) 1f else if (isDragging) dragProgress else fillProgress.value.coerceIn(0f, 1f)
                 Box(
                     Modifier

@@ -1,10 +1,10 @@
 package app.hypochlorite.ui
 
+import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.scrollBy
@@ -30,15 +30,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.BlurredEdgeTreatment
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -56,6 +56,7 @@ import app.hypochlorite.ui.theme.BodyStyle
 import app.hypochlorite.ui.theme.LocalHypochloriteColors
 import app.hypochlorite.ui.theme.onColor
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -158,33 +159,50 @@ private fun HypochloriteLyricLine(
     val rest = fill
     val emphasisMs = Lyrics.switchDurationMs(holdMs, EmphasisMs)
     val emphasisEase = lyricEase(emphasisMs, EmphasisMs)
-    val emphasis by animateFloatAsState(
-        if (active) 1f else 0f, tween(emphasisMs, easing = emphasisEase), label = "lyricEmphasis",
-    )
-    val highlight = remember { Animatable(-1.01f) }
+    // 模糊和扫光只在绘制时读动画值。换句时每一行都在动，读进组合会把整页歌词按帧重组。
+    val emphasisAnim = remember(text) { Animatable(if (active) 1f else 0f) }
+    val highlight = remember(text) { Animatable(-1.01f) }
+    val blurTarget = when {
+        browsing || active -> 0f
+        distance < 0 -> (-distance * 0.4f).coerceAtMost(3.2f)
+        else -> (distance * 0.2f).coerceAtMost(1.8f)
+    }
+    val blurAnim = remember(text) { Animatable(blurTarget) }
     LaunchedEffect(active, holdMs) {
         val base = if (active) SweepInMs else SweepOutMs
         val ms = Lyrics.switchDurationMs(holdMs, base)
+        launch {
+            emphasisAnim.animateTo(
+                if (active) 1f else 0f,
+                tween(emphasisMs, easing = emphasisEase),
+            )
+        }
         highlight.animateTo(
             if (active) 0f else -1.01f,
             tween(ms, easing = lyricEase(ms, base)),
         )
     }
-    val wipe = highlight.value
-    val blur by animateFloatAsState(
-        targetValue = when {
-            browsing || active -> 0f
-            distance < 0 -> (-distance * 0.4f).coerceAtMost(3.2f)
-            else -> (distance * 0.2f).coerceAtMost(1.8f)
-        },
-        animationSpec = tween(emphasisMs, easing = emphasisEase), label = "lyricBlur",
-    )
+    LaunchedEffect(blurTarget, emphasisMs) {
+        blurAnim.animateTo(blurTarget, tween(emphasisMs, easing = emphasisEase))
+    }
     BoxWithConstraints(
-        Modifier.fillMaxWidth().blur(blur.dp, BlurredEdgeTreatment.Unbounded).clipToBounds(),
+        Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                val radius = blurAnim.value
+                renderEffect = if (Build.VERSION.SDK_INT >= 31 && radius > 0.05f) {
+                    val px = radius.dp.toPx()
+                    BlurEffect(px, px, TileMode.Decal)
+                } else {
+                    null
+                }
+                clip = false
+            }
+            .clipToBounds(),
     ) {
         Box(
             Modifier.matchParentSize().graphicsLayer {
-                translationX = size.width * wipe
+                translationX = size.width * highlight.value
             }.background(fill),
         )
         // 左右对齐进度条：不再额外缩进。右边只留扫光放大 / 右移要用的空位，避免换行跟着动。
@@ -193,6 +211,7 @@ private fun HypochloriteLyricLine(
         val textModifier = Modifier
             .padding(end = (maxWidth - textWidth).coerceAtLeast(0.dp), top = 10.dp, bottom = 10.dp)
             .graphicsLayer {
+                val emphasis = emphasisAnim.value
                 transformOrigin = TransformOrigin(0f, 0.5f)
                 scaleX = 1f + 0.15f * emphasis
                 scaleY = scaleX
@@ -211,7 +230,7 @@ private fun HypochloriteLyricLine(
             Modifier
                 .fillMaxWidth()
                 .drawWithContent {
-                    val right = size.width * Lyrics.sweepReveal(wipe)
+                    val right = size.width * Lyrics.sweepReveal(highlight.value)
                     clipRect(left = 0f, top = 0f, right = right, bottom = size.height) {
                         this@drawWithContent.drawContent()
                     }

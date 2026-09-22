@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
@@ -22,6 +23,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.hypochlorite.HomeState
 import app.hypochlorite.HypochloriteViewModel
+import app.hypochlorite.netease.Album
+import app.hypochlorite.netease.Song
 import app.hypochlorite.ui.BackArrowIcon
 import app.hypochlorite.ui.Cover
 import app.hypochlorite.ui.Hairline
@@ -36,7 +39,6 @@ import app.hypochlorite.ui.theme.LocalHypochloriteColors
 
 @Composable
 internal fun AlbumScreen(albumName: String, albumId: String?, state: HomeState, vm: HypochloriteViewModel) {
-    val colors = LocalHypochloriteColors.current
     BackHandler { vm.back() }
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -63,64 +65,92 @@ internal fun AlbumScreen(albumName: String, albumId: String?, state: HomeState, 
             itemHeight = SongRowHeight,
             onDone = { vm.clearListJump() },
         )
-        LazyColumn(
-            state = listState,
+        AlbumTracks(
+            albumName = albumName,
+            album = state.album,
+            songs = state.albumSongs,
+            loading = state.albumLoading,
+            currentId = state.player.current?.id,
+            likedIds = state.likedSongIds,
+            inRoom = state.listen.room != null,
+            vm = vm,
+            listState = listState,
             modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 20.dp),
-        ) {
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 16.dp, bottom = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    val cover = state.album?.cover ?: state.albumSongs.firstOrNull()?.cover
-                    if (!cover.isNullOrEmpty()) {
-                        Cover(cover, modifier = Modifier.size(72.dp))
-                        Spacer(Modifier.width(14.dp))
+        )
+        MiniBar(state, vm)
+    }
+}
+
+@Composable
+private fun AlbumTracks(
+    albumName: String,
+    album: Album?,
+    songs: List<Song>,
+    loading: Boolean,
+    currentId: String?,
+    likedIds: Set<String>,
+    inRoom: Boolean,
+    vm: HypochloriteViewModel,
+    listState: LazyListState,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalHypochloriteColors.current
+    val cover = album?.cover ?: songs.firstOrNull()?.cover
+    LazyColumn(
+        state = listState,
+        modifier = modifier,
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 20.dp),
+    ) {
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp, bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (!cover.isNullOrEmpty()) {
+                    Cover(cover, modifier = Modifier.size(72.dp))
+                    Spacer(Modifier.width(14.dp))
+                }
+                Column(Modifier.weight(1f)) {
+                    MonoText(album?.name ?: albumName, bold = true, size = 22, maxLines = 2)
+                    val artist = album?.artistName.orEmpty()
+                    if (artist.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier.padding(top = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            MonoText("歌手: ", muted = true, size = 13)
+                            HoverBold(
+                                text = artist,
+                                onClick = { vm.openArtist(artist, album?.artistId) },
+                                color = colors.muted,
+                                size = 13,
+                            )
+                        }
                     }
-                    Column(Modifier.weight(1f)) {
-                        MonoText(state.album?.name ?: albumName, bold = true, size = 22, maxLines = 2)
-                        val artist = state.album?.artistName.orEmpty()
-                        if (artist.isNotEmpty()) {
-                            Row(
-                                modifier = Modifier.padding(top = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                MonoText("歌手: ", muted = true, size = 13)
-                                HoverBold(
-                                    text = artist,
-                                    onClick = { vm.openArtist(artist, state.album?.artistId) },
-                                    color = colors.muted,
-                                    size = 13,
-                                )
-                            }
-                        }
-                        if (state.albumSongs.isNotEmpty()) {
-                            MonoText("${state.albumSongs.size} 首歌曲", muted = true, size = 13, modifier = Modifier.padding(top = 2.dp))
-                        }
+                    if (songs.isNotEmpty()) {
+                        MonoText("${songs.size} 首歌曲", muted = true, size = 13, modifier = Modifier.padding(top = 2.dp))
                     }
                 }
             }
-            if (state.albumLoading) {
-                item { MonoText("…", muted = true) }
-            } else if (state.albumSongs.isEmpty()) {
-                item { MonoText("暂无歌曲", muted = true) }
-            }
-            itemsIndexed(state.albumSongs, key = { i, s -> "${s.id}-$i" }) { i, song ->
-                SongRow(
-                    song = song,
-                    onClick = { vm.playAll(state.albumSongs, i) },
-                    onLongPress = { vm.listenPushSong(song) },
-                    pushOnClick = state.listen.room != null,
-                    on = state.player.current?.id == song.id,
-                    isLiked = state.likedSongIds.contains(song.id),
-                    index = i,
-                    modifier = Modifier.animateItem(),
-                )
-            }
         }
-        MiniBar(state, vm)
+        if (loading) {
+            item { MonoText("…", muted = true) }
+        } else if (songs.isEmpty()) {
+            item { MonoText("暂无歌曲", muted = true) }
+        }
+        itemsIndexed(songs, key = { i, s -> "${s.id}-$i" }) { i, song ->
+            SongRow(
+                song = song,
+                onClick = { vm.playAll(songs, i) },
+                onLongPress = { vm.listenPushSong(song) },
+                pushOnClick = inRoom,
+                on = currentId == song.id,
+                isLiked = likedIds.contains(song.id),
+                index = i,
+                modifier = Modifier.animateItem(),
+            )
+        }
     }
 }

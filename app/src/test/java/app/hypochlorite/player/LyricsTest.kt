@@ -156,6 +156,27 @@ class LyricsTest {
     }
 
     @Test
+    fun currentIndexFindsTheLineOnALongTimeline() {
+        val lines = List(40) { LyricLine(it * 1_000L, "l$it") }
+        assertEquals(-1, Lyrics.currentIndex(lines, -1))
+        assertEquals(0, Lyrics.currentIndex(lines, 0))
+        assertEquals(0, Lyrics.currentIndex(lines, 999))
+        assertEquals(12, Lyrics.currentIndex(lines, 12_500))
+        assertEquals(39, Lyrics.currentIndex(lines, 39_000))
+        assertEquals(39, Lyrics.currentIndex(lines, 39_000 + 7_999))
+        assertEquals(-1, Lyrics.currentIndex(lines, 39_000 + 8_000))
+        val tied = listOf(
+            LyricLine(0, "a"),
+            LyricLine(1_000, "b"),
+            LyricLine(1_000, "c"),
+            LyricLine(4_000, "d"),
+        )
+        assertEquals(2, Lyrics.currentIndex(tied, 1_000))
+        assertEquals(2, Lyrics.currentIndex(tied, 3_999))
+        assertEquals(3, Lyrics.currentIndex(tied, 4_000))
+    }
+
+    @Test
     fun scrollTargetDoesNotJumpHomeWhenNoLineIsActive() {
         assertNull(Lyrics.scrollTarget(-1, 12, alreadyFollowing = true))
         assertNull(Lyrics.scrollTarget(-1, 0, alreadyFollowing = false))

@@ -42,6 +42,7 @@ import app.hypochlorite.HomeState
 import app.hypochlorite.HypochloriteViewModel
 import app.hypochlorite.Space
 import app.hypochlorite.netease.Playlist
+import app.hypochlorite.netease.Song
 import app.hypochlorite.ui.BackArrowIcon
 import app.hypochlorite.ui.ExpandingSearch
 import app.hypochlorite.ui.Hairline
@@ -161,7 +162,16 @@ internal fun HomeScreen(state: HomeState, vm: HypochloriteViewModel) {
                             when (page) {
                                 0 -> PlaylistFlow(state.liked, state.loading, state.loggedIn, vm)
                                 1 -> PlaylistFlow(state.mine, state.loading, state.loggedIn, vm)
-                                else -> DailyFlow(state, vm)
+                                else -> DailyFlow(
+                                    playlists = state.dailyPlaylists,
+                                    songs = state.dailySongs,
+                                    loading = state.loading,
+                                    loggedIn = state.loggedIn,
+                                    currentId = state.player.current?.id,
+                                    likedIds = state.likedSongIds,
+                                    inRoom = state.listen.room != null,
+                                    vm = vm,
+                                )
                             }
                         }
                     }
@@ -306,21 +316,30 @@ private fun PlaylistFlow(items: List<Playlist>, loading: Boolean, loggedIn: Bool
 }
 
 @Composable
-private fun DailyFlow(state: HomeState, vm: HypochloriteViewModel) {
+private fun DailyFlow(
+    playlists: List<Playlist>,
+    songs: List<Song>,
+    loading: Boolean,
+    loggedIn: Boolean,
+    currentId: String?,
+    likedIds: Set<String>,
+    inRoom: Boolean,
+    vm: HypochloriteViewModel,
+) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 20.dp),
     ) {
-        if (state.dailyPlaylists.isEmpty() && state.dailySongs.isEmpty()) {
+        if (playlists.isEmpty() && songs.isEmpty()) {
             item {
                 MonoText(
-                    if (state.loading) "正在获取今日推荐…" else if (!state.loggedIn) "登录后获取个性化每日推荐" else "今日暂无推荐数据",
+                    if (loading) "正在获取今日推荐…" else if (!loggedIn) "登录后获取个性化每日推荐" else "今日暂无推荐数据",
                     muted = true,
                     modifier = Modifier.padding(top = 12.dp),
                 )
             }
         }
-        itemsIndexed(state.dailyPlaylists, key = { i, pl -> "p-${pl.id}-$i" }) { i, pl ->
+        itemsIndexed(playlists, key = { i, pl -> "p-${pl.id}-$i" }) { i, pl ->
             PlaylistRow(
                 playlist = pl,
                 onClick = { vm.openPlaylist(pl) },
@@ -328,14 +347,14 @@ private fun DailyFlow(state: HomeState, vm: HypochloriteViewModel) {
                 modifier = Modifier.animateItem(),
             )
         }
-        itemsIndexed(state.dailySongs, key = { i, s -> "s-${s.id}-$i" }) { i, song ->
+        itemsIndexed(songs, key = { i, s -> "s-${s.id}-$i" }) { i, song ->
             SongRow(
                 song = song,
-                onClick = { vm.playAll(state.dailySongs, i) },
+                onClick = { vm.playAll(songs, i) },
                 onLongPress = { vm.listenPushSong(song) },
-                pushOnClick = state.listen.room != null,
-                on = state.player.current?.id == song.id,
-                isLiked = state.likedSongIds.contains(song.id),
+                pushOnClick = inRoom,
+                on = currentId == song.id,
+                isLiked = likedIds.contains(song.id),
                 index = i,
                 modifier = Modifier.animateItem(),
             )

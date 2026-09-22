@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
@@ -23,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import app.hypochlorite.HomeState
 import app.hypochlorite.HypochloriteViewModel
 import app.hypochlorite.netease.Playlist
+import app.hypochlorite.netease.Song
 import app.hypochlorite.ui.BackArrowIcon
 import app.hypochlorite.ui.Cover
 import app.hypochlorite.ui.Hairline
@@ -62,44 +64,69 @@ internal fun PlaylistScreen(pl: Playlist, state: HomeState, vm: HypochloriteView
             itemHeight = SongRowHeight,
             onDone = { vm.clearListJump() },
         )
-        LazyColumn(
-            state = listState,
+        PlaylistTracks(
+            pl = pl,
+            songs = state.playlistSongs,
+            loading = state.loading,
+            currentId = state.player.current?.id,
+            likedIds = state.likedSongIds,
+            inRoom = state.listen.room != null,
+            vm = vm,
+            listState = listState,
             modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 20.dp),
-        ) {
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 16.dp, bottom = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (!pl.cover.isNullOrEmpty()) {
-                        Cover(pl.cover, modifier = Modifier.size(72.dp))
-                        Spacer(Modifier.width(14.dp))
-                    }
-                    Column(Modifier.weight(1f)) {
-                        MonoText(pl.name, bold = true, size = 22, maxLines = 2)
-                        if (pl.trackCount > 0) {
-                            MonoText("${pl.trackCount} 首歌曲", muted = true, size = 13, modifier = Modifier.padding(top = 4.dp))
-                        }
+        )
+        MiniBar(state, vm)
+    }
+}
+
+@Composable
+private fun PlaylistTracks(
+    pl: Playlist,
+    songs: List<Song>,
+    loading: Boolean,
+    currentId: String?,
+    likedIds: Set<String>,
+    inRoom: Boolean,
+    vm: HypochloriteViewModel,
+    listState: LazyListState,
+    modifier: Modifier = Modifier,
+) {
+    LazyColumn(
+        state = listState,
+        modifier = modifier,
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 20.dp),
+    ) {
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp, bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (!pl.cover.isNullOrEmpty()) {
+                    Cover(pl.cover, modifier = Modifier.size(72.dp))
+                    Spacer(Modifier.width(14.dp))
+                }
+                Column(Modifier.weight(1f)) {
+                    MonoText(pl.name, bold = true, size = 22, maxLines = 2)
+                    if (pl.trackCount > 0) {
+                        MonoText("${pl.trackCount} 首歌曲", muted = true, size = 13, modifier = Modifier.padding(top = 4.dp))
                     }
                 }
             }
-            if (state.loading) item { MonoText("正在获取歌曲列表…", muted = true, modifier = Modifier.padding(top = 8.dp)) }
-            itemsIndexed(state.playlistSongs, key = { i, s -> "${s.id}-$i" }) { i, song ->
-                SongRow(
-                    song = song,
-                    onClick = { vm.playAll(state.playlistSongs, i) },
-                    onLongPress = { vm.listenPushSong(song) },
-                    pushOnClick = state.listen.room != null,
-                    on = state.player.current?.id == song.id,
-                    isLiked = state.likedSongIds.contains(song.id),
-                    index = i,
-                    modifier = Modifier.animateItem(),
-                )
-            }
         }
-        MiniBar(state, vm)
+        if (loading) item { MonoText("正在获取歌曲列表…", muted = true, modifier = Modifier.padding(top = 8.dp)) }
+        itemsIndexed(songs, key = { i, s -> "${s.id}-$i" }) { i, song ->
+            SongRow(
+                song = song,
+                onClick = { vm.playAll(songs, i) },
+                onLongPress = { vm.listenPushSong(song) },
+                pushOnClick = inRoom,
+                on = currentId == song.id,
+                isLiked = likedIds.contains(song.id),
+                index = i,
+                modifier = Modifier.animateItem(),
+            )
+        }
     }
 }

@@ -500,14 +500,19 @@ class HypochloritePlayer(
                 runCatching {
                     val pos = exo.currentPosition.coerceAtLeast(0)
                     val dur = exo.duration.let { if (it == C.TIME_UNSET || it < 0) 0 else it }
-                    val lines = _state.value.lyricLines
-                    _state.update {
-                        it.copy(
-                            positionMs = pos,
-                            durationMs = dur,
-                            lyricIndex = Lyrics.currentIndex(lines, pos),
-                            playing = exo.isPlaying,
-                        )
+                    val playingNow = exo.isPlaying
+                    val cur = _state.value
+                    val index = Lyrics.currentIndex(cur.lyricLines, pos)
+                    // 暂停时空转不再发新快照。播放中进度每拍都变，这里拦不住，只拦住没动的时候。
+                    if (cur.positionMs != pos || cur.durationMs != dur || cur.lyricIndex != index || cur.playing != playingNow) {
+                        _state.update {
+                            it.copy(
+                                positionMs = pos,
+                                durationMs = dur,
+                                lyricIndex = index,
+                                playing = playingNow,
+                            )
+                        }
                     }
                     // 位置没动（暂停 / 播完停住）就一次都不写：既省 IO，也避免空转刷盘
                     val now = System.currentTimeMillis()

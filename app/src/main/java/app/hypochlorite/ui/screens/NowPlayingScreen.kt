@@ -63,11 +63,14 @@ import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.sp
 import coil.imageLoader
 import coil.request.ImageRequest
-import app.hypochlorite.HomeState
 import app.hypochlorite.HypochloriteViewModel
 import app.hypochlorite.Route
+import app.hypochlorite.ThemeReveal
 import app.hypochlorite.netease.LyricLine
+import app.hypochlorite.netease.Song
 import app.hypochlorite.player.Lyrics
+import app.hypochlorite.player.PlayerSnapshot
+import app.hypochlorite.ui.theme.MonetPalette
 import app.hypochlorite.ui.AudioWaveLine
 import app.hypochlorite.ui.CoverAnchor
 import app.hypochlorite.ui.CoverBlurBackdrop
@@ -103,8 +106,25 @@ import app.hypochlorite.ui.theme.Warn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+/**
+ * 详情页真正读的字段。和 [app.hypochlorite.HomeState] 拆开，
+ * 搜索框、登录倒计时、歌单加载不会因为 equals 失败把封面和歌词整页重组。
+ */
+internal data class NowPlayingUi(
+    val player: PlayerSnapshot,
+    val reveal: ThemeReveal?,
+    val backdropCoverUrl: String?,
+    val monetEnabled: Boolean,
+    val palette: MonetPalette,
+    val songTransitionDir: Int,
+    val songTransitionSeq: Long,
+    val route: Route,
+    val likedSongIds: Set<String>,
+    val playlistSongs: List<Song>,
+)
+
 @Composable
-internal fun NowPlayingScreen(state: HomeState, vm: HypochloriteViewModel) {
+internal fun NowPlayingScreen(state: NowPlayingUi, vm: HypochloriteViewModel) {
     val colors = LocalHypochloriteColors.current
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
@@ -24,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.hypochlorite.HomeState
 import app.hypochlorite.HypochloriteViewModel
+import app.hypochlorite.netease.Song
 import app.hypochlorite.ui.BackArrowIcon
 import app.hypochlorite.ui.Cover
 import app.hypochlorite.ui.Hairline
@@ -63,77 +65,110 @@ internal fun ArtistScreen(artistName: String, state: HomeState, vm: Hypochlorite
             itemHeight = SongRowHeight,
             onDone = { vm.clearListJump() },
         )
-        LazyColumn(
-            state = listState,
+        ArtistTracks(
+            artistName = artistName,
+            songs = state.artistSongs,
+            cover = state.artistCover,
+            loading = state.artistLoading,
+            hasMore = state.artistHasMore,
+            loadingMore = state.artistLoadingMore,
+            total = state.artistTotal,
+            currentId = state.player.current?.id,
+            likedIds = state.likedSongIds,
+            inRoom = state.listen.room != null,
+            vm = vm,
+            listState = listState,
             modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 20.dp),
-        ) {
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 16.dp, bottom = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    val cover = state.artistCover ?: state.artistSongs.firstOrNull()?.cover
-                    if (!cover.isNullOrEmpty()) {
-                        Cover(cover, modifier = Modifier.size(72.dp))
-                        Spacer(Modifier.width(14.dp))
-                    }
-                    Column(Modifier.weight(1f)) {
-                        MonoText(artistName, bold = true, size = 24)
-                        if (state.artistSongs.isNotEmpty()) {
-                            val countText = if (state.artistTotal > state.artistSongs.size) {
-                                "${state.artistSongs.size} / ${state.artistTotal} 首歌曲"
-                            } else {
-                                "${state.artistSongs.size} 首歌曲"
-                            }
-                            MonoText(countText, muted = true, size = 13, modifier = Modifier.padding(top = 4.dp))
-                        }
-                    }
+        )
+        MiniBar(state, vm)
+    }
+}
+
+@Composable
+private fun ArtistTracks(
+    artistName: String,
+    songs: List<Song>,
+    cover: String?,
+    loading: Boolean,
+    hasMore: Boolean,
+    loadingMore: Boolean,
+    total: Int,
+    currentId: String?,
+    likedIds: Set<String>,
+    inRoom: Boolean,
+    vm: HypochloriteViewModel,
+    listState: LazyListState,
+    modifier: Modifier = Modifier,
+) {
+    val headerCover = cover ?: songs.firstOrNull()?.cover
+    LazyColumn(
+        state = listState,
+        modifier = modifier,
+        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 20.dp),
+    ) {
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp, bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (!headerCover.isNullOrEmpty()) {
+                    Cover(headerCover, modifier = Modifier.size(72.dp))
+                    Spacer(Modifier.width(14.dp))
                 }
-            }
-            if (state.artistLoading) {
-                item { MonoText("…", muted = true) }
-            } else if (state.artistSongs.isEmpty()) {
-                item { MonoText("暂无歌曲", muted = true) }
-            }
-            itemsIndexed(state.artistSongs, key = { i, s -> "${s.id}-$i" }) { i, song ->
-                SongRow(
-                    song = song,
-                    onClick = { vm.playAll(state.artistSongs, i) },
-                    onLongPress = { vm.listenPushSong(song) },
-                    pushOnClick = state.listen.room != null,
-                    on = state.player.current?.id == song.id,
-                    isLiked = state.likedSongIds.contains(song.id),
-                    index = i,
-                    modifier = Modifier.animateItem(),
-                )
-            }
-            if (state.artistHasMore) {
-                item {
-                    LaunchedEffect(state.artistSongs.size) {
-                        vm.loadMoreArtistSongs()
-                    }
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 14.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (state.artistLoadingMore) {
-                            MonoText("加载更多中…", muted = true, size = 13)
+                Column(Modifier.weight(1f)) {
+                    MonoText(artistName, bold = true, size = 24)
+                    if (songs.isNotEmpty()) {
+                        val countText = if (total > songs.size) {
+                            "${songs.size} / $total 首歌曲"
                         } else {
-                            HoverBold(
-                                text = "[点击加载更多歌曲 (${state.artistSongs.size}/${state.artistTotal})]",
-                                onClick = { vm.loadMoreArtistSongs() },
-                                size = 13,
-                            )
+                            "${songs.size} 首歌曲"
                         }
+                        MonoText(countText, muted = true, size = 13, modifier = Modifier.padding(top = 4.dp))
                     }
                 }
             }
         }
-        MiniBar(state, vm)
+        if (loading) {
+            item { MonoText("…", muted = true) }
+        } else if (songs.isEmpty()) {
+            item { MonoText("暂无歌曲", muted = true) }
+        }
+        itemsIndexed(songs, key = { i, s -> "${s.id}-$i" }) { i, song ->
+            SongRow(
+                song = song,
+                onClick = { vm.playAll(songs, i) },
+                onLongPress = { vm.listenPushSong(song) },
+                pushOnClick = inRoom,
+                on = currentId == song.id,
+                isLiked = likedIds.contains(song.id),
+                index = i,
+                modifier = Modifier.animateItem(),
+            )
+        }
+        if (hasMore) {
+            item {
+                LaunchedEffect(songs.size) {
+                    vm.loadMoreArtistSongs()
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 14.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (loadingMore) {
+                        MonoText("加载更多中…", muted = true, size = 13)
+                    } else {
+                        HoverBold(
+                            text = "[点击加载更多歌曲 (${songs.size}/$total)]",
+                            onClick = { vm.loadMoreArtistSongs() },
+                            size = 13,
+                        )
+                    }
+                }
+            }
+        }
     }
 }
