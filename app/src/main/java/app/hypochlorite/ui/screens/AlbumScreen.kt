@@ -91,7 +91,7 @@ internal fun AlbumScreen(albumName: String, albumId: String?, state: HomeState, 
                                 MonoText("歌手: ", muted = true, size = 13)
                                 HoverBold(
                                     text = artist,
-                                    onClick = { vm.openArtist(artist) },
+                                    onClick = { vm.openArtist(artist, state.album?.artistId) },
                                     color = colors.muted,
                                     size = 13,
                                 )

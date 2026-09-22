@@ -3,6 +3,7 @@ package app.hypochlorite.netease
 import okhttp3.OkHttpClient
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -119,6 +120,7 @@ class NeteaseClient(
             creatorId = creator?.opt("userId")?.toString() ?: pl.opt("userId")?.toString(),
             subscribed = pl.optBoolean("subscribed", false),
             specialType = pl.optInt("specialType", 0),
+            creatorName = creator?.optString("nickname").orEmpty(),
         )
     }
 
@@ -283,29 +285,51 @@ class NeteaseClient(
         return out
     }
 
-    fun searchSongs(query: String, limit: Int = 20): List<Song> {
-        val q = query.trim()
-        if (q.isEmpty()) return emptyList()
-        SongId.parse(q)?.let { id ->
-            getSongDetail(id)?.let { return listOf(it) }
-        }
+    /**
+     * cloudsearch。type：1 单曲，10 专辑，100 歌手，1000 歌单。
+     *
+     * 到不了网易，或者返回了没有 result 的错误码，才算失败。空列表是一次成功的搜索。
+     */
+    private fun cloudSearch(query: String, type: Int, limit: Int, offset: Int): JSONObject {
         val res = ncm(
             "/api/cloudsearch/pc",
             JSONObject()
-                .put("s", q)
-                .put("type", 1)
+                .put("s", query)
+                .put("type", type)
                 .put("limit", limit)
-                .put("offset", 0)
+                .put("offset", offset)
                 .put("total", true),
         )
-        val songs = res.json?.optJSONObject("result")?.optJSONArray("songs")
+        val json = res.json ?: throw IOException("cloudsearch unreachable")
+        if (json.optJSONObject("result") == null && json.optInt("code", 200) != 200) {
+            throw IOException("cloudsearch ${json.optInt("code")}")
+        }
+        return json
+    }
+
+    fun searchSongs(query: String, limit: Int = 20, offset: Int = 0): List<Song> =
+        searchSongPage(query, limit, offset).items
+
+    fun searchSongPage(query: String, limit: Int = 20, offset: Int = 0): SearchPage<Song> {
+        val q = query.trim()
+        if (q.isEmpty()) return SearchPage(emptyList(), 0)
+        // 歌曲链接 / 纯 id 只在第一页短路。翻页仍走关键词，避免下一页又吐回同一首。
+        if (offset == 0) {
+            SongId.parse(q)?.let { id ->
+                getSongDetail(id)?.let { return SearchPage(listOf(it), 1) }
+            }
+        }
+        val json = cloudSearch(q, type = 1, limit = limit, offset = offset)
+        val result = json.optJSONObject("result")
+        val songs = result?.optJSONArray("songs")
+        val total = if (result != null && result.has("songCount")) result.optInt("songCount") else -1
         val out = mutableListOf<Song>()
         if (songs != null) {
             for (i in 0 until minOf(songs.length(), limit)) {
                 normalizeSong(songs.optJSONObject(i))?.let { out.add(it) }
             }
         }
-        if (out.any { it.cover.isEmpty() }) {
+        if (offset == 0 && out.any { it.cover.isEmpty() }) {
             val missingIds = out.filter { it.cover.isEmpty() }.map { it.id }
             val details = runCatching { getSongDetails(missingIds) }.getOrDefault(emptyList()).associateBy { it.id }
             for (i in out.indices) {
@@ -316,29 +340,34 @@ class NeteaseClient(
                 }
             }
         }
-        return out
+        return SearchPage(out, total)
     }
 
-    fun searchPlaylists(query: String, limit: Int = 20): List<Playlist> {
+    fun searchPlaylists(query: String, limit: Int = 20, offset: Int = 0): List<Playlist> =
+        searchPlaylistPage(query, limit, offset).items
+
+    fun searchPlaylistPage(query: String, limit: Int = 20, offset: Int = 0): SearchPage<Playlist> {
         val q = query.trim()
-        if (q.isEmpty()) return emptyList()
-        val res = ncm(
-            "/api/cloudsearch/pc",
-            JSONObject()
-                .put("s", q)
-                .put("type", 1000)
-                .put("limit", limit)
-                .put("offset", 0)
-                .put("total", true),
-        )
-        val lists = res.json?.optJSONObject("result")?.optJSONArray("playlists")
-        val out = mutableListOf<Playlist>()
-        if (lists != null) {
-            for (i in 0 until minOf(lists.length(), limit)) {
-                normalizePlaylist(lists.optJSONObject(i))?.let { out.add(it) }
-            }
-        }
-        return out
+        if (q.isEmpty()) return SearchPage(emptyList(), 0)
+        return parsePlaylistSearch(cloudSearch(q, type = 1000, limit = limit, offset = offset), limit)
+    }
+
+    fun searchAlbums(query: String, limit: Int = 20, offset: Int = 0): List<Album> =
+        searchAlbumPage(query, limit, offset).items
+
+    fun searchAlbumPage(query: String, limit: Int = 20, offset: Int = 0): SearchPage<Album> {
+        val q = query.trim()
+        if (q.isEmpty()) return SearchPage(emptyList(), 0)
+        return parseAlbumSearch(cloudSearch(q, type = 10, limit = limit, offset = offset), limit)
+    }
+
+    fun searchArtists(query: String, limit: Int = 20, offset: Int = 0): List<Artist> =
+        searchArtistPage(query, limit, offset).items
+
+    fun searchArtistPage(query: String, limit: Int = 20, offset: Int = 0): SearchPage<Artist> {
+        val q = query.trim()
+        if (q.isEmpty()) return SearchPage(emptyList(), 0)
+        return parseArtistSearch(cloudSearch(q, type = 100, limit = limit, offset = offset), limit)
     }
 
     fun userPlaylists(uid: String, limit: Int = 1000): List<Playlist> {
@@ -398,30 +427,16 @@ class NeteaseClient(
         return normalizePlaylist(pl) to songs
     }
 
+    /** 打开歌手页时只要第一条。失败当成没找到，调用方再走歌名兜底。 */
     fun searchArtist(query: String): Pair<String?, String?> {
-        val q = query.trim()
-        if (q.isEmpty()) return null to null
-        val res = ncm(
-            "/api/cloudsearch/pc",
-            JSONObject().put("s", q).put("type", 100).put("limit", 1).put("offset", 0).put("total", true),
-        )
-        val first = res.json?.optJSONObject("result")?.optJSONArray("artists")?.optJSONObject(0)
-        val id = first?.opt("id")?.toString()
-        val pic = first?.optString("picUrl")?.ifEmpty { first.optString("img1v1Url") }?.ifEmpty { null }
-        return id to pic
+        val first = runCatching { searchArtistPage(query, limit = 1).items.firstOrNull() }.getOrNull()
+        return first?.id to first?.cover?.ifEmpty { null }
     }
 
+    /** 打开专辑页时只要第一条。失败当成没找到。 */
     fun searchAlbum(query: String): Pair<String?, String?> {
-        val q = query.trim()
-        if (q.isEmpty()) return null to null
-        val res = ncm(
-            "/api/cloudsearch/pc",
-            JSONObject().put("s", q).put("type", 10).put("limit", 1).put("offset", 0).put("total", true),
-        )
-        val first = res.json?.optJSONObject("result")?.optJSONArray("albums")?.optJSONObject(0)
-        val id = first?.opt("id")?.toString()
-        val pic = first?.optString("picUrl")?.ifEmpty { first.optString("blurPicUrl") }?.ifEmpty { null }
-        return id to pic
+        val first = runCatching { searchAlbumPage(query, limit = 1).items.firstOrNull() }.getOrNull()
+        return first?.id to first?.cover?.ifEmpty { null }
     }
 
     fun albumDetail(albumId: String): Pair<Album?, List<Song>> {
