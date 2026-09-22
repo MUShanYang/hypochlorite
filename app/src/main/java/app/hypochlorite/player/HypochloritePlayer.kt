@@ -108,6 +108,39 @@ data class PlayerSnapshot(
 )
 
 /**
+ * 进度时钟：200ms 一跳。
+ *
+ * 这三项目前是 [PlayerSnapshot] 里最吵的字段。把它们单独送进界面，
+ * [HomeState] 就不会跟着走针重组合整棵列表。
+ */
+data class PlayerClock(
+    val positionMs: Long = 0L,
+    val durationMs: Long = 0L,
+    val lyricIndex: Int = -1,
+)
+
+fun PlayerSnapshot.clock(): PlayerClock =
+    PlayerClock(positionMs = positionMs, durationMs = durationMs, lyricIndex = lyricIndex)
+
+/**
+ * 列表 / 封面 / 按钮真正依赖的字段。进度和歌词下标不算。
+ */
+fun PlayerSnapshot.sameUiAs(other: PlayerSnapshot): Boolean =
+    queue === other.queue &&
+        index == other.index &&
+        current == other.current &&
+        playing == other.playing &&
+        lyricLines === other.lyricLines &&
+        lyricsResolved == other.lyricsResolved &&
+        error == other.error &&
+        roam == other.roam &&
+        playable == other.playable &&
+        quality == other.quality &&
+        playMode == other.playMode &&
+        history === other.history &&
+        loading == other.loading
+
+/**
  * HiFi 音频输出配置。
  *
  * 和 [QualityPreset] 的区别：「音质偏好」决定跟服务器要哪一档码流，
@@ -162,7 +195,7 @@ class HypochloritePlayer(
     private val scope: CoroutineScope,
     private val okHttp: OkHttpClient,
     private val session: SessionStore,
-) : DjMixEngine.DjHost {
+) {
     private val savedQueue = mutableListOf<Song>()
     private var savedIndex = -1
 
@@ -235,32 +268,13 @@ class HypochloritePlayer(
     /** 音频输出配置。改到影响管道的项会重建 [exo]（见 [rebuildOutputIfNeeded]） */
     private var audioOut = AudioOutConfig()
 
-    /**
-     * 主管道的 DJ 音效处理器。平时全中性（快速拷贝路径，不花 CPU），
-     * 只有自动接歌的十几秒里才由 [dj] 推参数。增益走它而不是 `exo.setVolume` ——
-     * 后者装着用户的精确音量偏好，交叉淡化不能碰。
-     */
-    private val djFxMain = DjFxProcessor()
+    /** 波形电平。重建播放器时换一只，避免和正在释放的音频轨抢同一个处理器。 */
+    private var levelMeter = AudioLevelProcessor()
 
     fun audioLevel(): Float {
         if (!exo.isPlaying) return 0f
-        val mainLevel = djFxMain.audioLevel()
-        val deckLevel = if (::dj.isInitialized) dj.audioLevel() else 0f
-        return (maxOf(mainLevel, deckLevel) * exo.volume).coerceIn(0f, 1f)
+        return (levelMeter.audioLevel() * exo.volume).coerceIn(0f, 1f)
     }
-
-    /** DJ 自动接歌引擎。init 末尾才建（要拿 this 当宿主），用前判 null 的地方没有 */
-    private lateinit var dj: DjMixEngine
-
-    /** 用户偏好：DJ 自动接歌开没开。落盘 key `dj_mix` */
-    private var djEnabled = false
-
-    /** 分析器拉流用的请求头：和播放数据厂同一套（CDN 要 Referer 才放行） */
-    private val djHttpHeaders = mapOf(
-        "Referer" to "https://music.163.com/",
-        "Origin" to "https://music.163.com",
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    )
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var focusRequest: AudioFocusRequest? = null
@@ -280,9 +294,6 @@ class HypochloritePlayer(
         applyQualityFromStore()
         exo.setVolume(audioOut.gain())
         bindPreferredDevice()
-        dj = DjMixEngine(context, buildDataFactory(), djHttpHeaders, this)
-        djEnabled = session.isDjMix()
-        dj.setEnabled(djEnabled)
         startTick()
     }
 
@@ -303,7 +314,6 @@ class HypochloritePlayer(
     /**
      * 播放开流先查字节缓存，未命中的区间走 OkHttp 上游，读到的数据顺手写回缓存。
      * 缓存建不出来（理论上不会）就退回纯网络直连，行为和从前一样。
-     * 抽成独立方法：DJ 引擎的副播放器要用同一条数据厂（共享缓存才能秒备 deck）。
      */
     private fun buildDataFactory(): androidx.media3.datasource.DataSource.Factory =
         mediaCache?.let { cache ->
@@ -315,14 +325,14 @@ class HypochloritePlayer(
         } ?: buildOkHttpDataFactory()
 
     /**
-     * 带 DJ 音效处理器的渲染厂。
-     *
-     * 自定义 AudioProcessor 通过「覆写 buildAudioSink」挂进去 —— media3 没有
-     * 直接往 ExoPlayer.Builder 塞处理器的口子。sink 建不出来就退回父类默认
-     * （等于没有 DJ 音效），绝不让播放本身起不来。
+     * 渲染厂。电平表通过覆写 buildAudioSink 挂进管道 —— media3 没有直接往
+     * ExoPlayer.Builder 塞处理器的口子。sink 建不出来就退回父类默认，
+     * 波形读不到电平，播放本身照常起来。
      */
-    private fun buildRenderersFactory(): DefaultRenderersFactory =
-        object : DefaultRenderersFactory(context) {
+    private fun buildRenderersFactory(): DefaultRenderersFactory {
+        val meter = AudioLevelProcessor()
+        levelMeter = meter
+        return object : DefaultRenderersFactory(context) {
             override fun buildAudioSink(
                 context: Context,
                 enableFloatOutput: Boolean,
@@ -332,12 +342,13 @@ class HypochloritePlayer(
                     DefaultAudioSink.Builder(context)
                         .setEnableFloatOutput(enableFloatOutput)
                         .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-                        .setAudioProcessors(arrayOf(djFxMain))
+                        .setAudioProcessors(arrayOf(meter))
                         .build()
                 }.getOrNull()
                 return custom ?: super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)!!
             }
         }
+    }
 
     private fun buildExo(context: Context): ExoPlayer {
         val data: androidx.media3.datasource.DataSource.Factory = buildDataFactory()
@@ -525,8 +536,6 @@ class HypochloritePlayer(
                             }
                         }
                     }
-                    // DJ 自动接歌：状态机挂在 tick 上走，内部自己判相位，关了是空转
-                    dj.onTick(pos, dur)
                 }
                 delay(200)
             }
@@ -537,47 +546,6 @@ class HypochloritePlayer(
 
     /** 当前生效的音频输出配置（含记得的 USB 设备 id） */
     fun audioOut(): AudioOutConfig = audioOut
-
-    // ------------------------------------------------------------------ DJ 自动接歌
-
-    fun djMixEnabled(): Boolean = djEnabled
-
-    /** 开关 DJ 自动接歌。用户显式偏好 → 落盘；关掉时引擎立刻收场（增益、速度归位） */
-    fun setDjMix(on: Boolean) {
-        djEnabled = on
-        session.saveDjMix(on)
-        dj.setEnabled(on)
-    }
-
-    // --- DjMixEngine.DjHost：引擎只读状态，全在主线程被调 ---------------------
-
-    override val main: ExoPlayer get() = exo
-    override val mainFx: DjFxProcessor get() = djFxMain
-    override fun currentSongId(): String? = _state.value.current?.id
-    override fun nextWindowQueueIndex(): Int? = windowQueue.getOrNull(1)
-    override fun nextWindowMediaItem(): MediaItem? = runCatching {
-        if (exo.mediaItemCount > 1) exo.getMediaItemAt(1) else null
-    }.getOrNull()
-
-    override fun songAt(queueIdx: Int): Song? = _state.value.queue.getOrNull(queueIdx)
-    override fun playableUrl(songId: String): String? =
-        playableCache[playableKey(songId)]?.playUrl?.takeIf { it.isNotEmpty() }
-
-    override fun durationOf(songId: String): Long =
-        _state.value.queue.firstOrNull { it.id == songId }?.durationMs ?: 0L
-
-    override fun qualityId(): String = _state.value.quality.id
-    override fun mixAllowed(): Boolean =
-        _state.value.playMode != PlayMode.LOOP_ONE && _state.value.error == null
-
-    override fun isPlaying(): Boolean = runCatching { exo.isPlaying }.getOrDefault(false)
-
-    /** deck 也要钉到独占的 USB 设备上，否则过渡那几秒声音会从两个出口出来 */
-    override fun bindDeckOutput(player: ExoPlayer) {
-        if (!audioOut.usbExclusive) return
-        val dev = pickUsbDevice(audioOutputs(context), audioOut.rememberedUsbId) ?: return
-        runCatching { player.setPreferredAudioDevice(dev) }
-    }
 
     /**
      * 应用一套新的音频输出配置。
@@ -609,8 +577,6 @@ class HypochloritePlayer(
         val pipelineChanged = !next.samePipelineAs(prev)
 
         if (pipelineChanged) {
-            // 换实例等于过渡现场作废：deck 还响着就乱套了
-            dj.cancel()
             val wasPlaying = runCatching { exo.isPlaying }.getOrDefault(false)
             val songId = _state.value.current?.id
             val pos = runCatching { exo.currentPosition }.getOrDefault(0L)
@@ -920,7 +886,6 @@ class HypochloritePlayer(
         session.saveQualityId(q.id)
         _state.update { it.copy(quality = q) }
         // 窗口里预缓冲的那几首还挂着旧档位的 URL，按新档位重接一遍
-        dj.cancel()
         refreshUpcoming()
     }
 
@@ -950,7 +915,6 @@ class HypochloritePlayer(
         if (songs.isEmpty()) return
         val at = songs.indexOfFirst { it.id == songId }
         if (at < 0) return
-        dj.cancel()
         _state.update { it.copy(queue = songs, index = at, current = songs[at], roam = false, error = null) }
         playAt(at, initialSeekMs.coerceAtLeast(0L), autoPlay)
     }
@@ -961,7 +925,6 @@ class HypochloritePlayer(
         val song = q[at]
         val gen = ++playGen
         endedForId = null
-        dj.cancel()
         recordHistory(_state.value.current.takeIf { it?.id != song.id })
         windowJob?.cancel()
         _state.update {
@@ -1142,7 +1105,6 @@ class HypochloritePlayer(
         if (expectQueueIndex < 0) return false
         val pos = windowQueue.indexOfFirst { it == expectQueueIndex }
         if (pos <= 0) return false
-        dj.cancel()
         return runCatching {
             exo.seekTo(pos, 0L)
             exo.play()
@@ -1155,7 +1117,6 @@ class HypochloritePlayer(
         val playable = playableCache[playableKey(song.id)] ?: return false
         if (playable.playUrl.isNullOrEmpty()) return false
         val pos = runCatching { exo.currentMediaItemIndex }.getOrDefault(0)
-        dj.cancel()
         return runCatching {
             exo.addMediaItem(pos, buildItem(song, playable))
             windowQueue.add(pos, queueIdx)
@@ -1182,7 +1143,6 @@ class HypochloritePlayer(
             PlayMode.LOOP_ONE -> PlayMode.SHUFFLE
             PlayMode.SHUFFLE -> PlayMode.SEQUENCE
         }
-        dj.cancel()
         _state.update { it.copy(playMode = next) }
         // 模式的语义变了（单曲循环不要下一项、随机要重掷）→ 窗口重接
         applyRepeatMode()
@@ -1296,7 +1256,6 @@ class HypochloritePlayer(
     }
 
     fun seek(positionMs: Long) {
-        dj.cancel()
         runCatching { exo.seekTo(positionMs.coerceAtLeast(0)) }
     }
 
@@ -1328,7 +1287,6 @@ class HypochloritePlayer(
      */
     fun replaceQueue(songs: List<Song>, keepIndex: Boolean = false, keepCurrent: Boolean = false) {
         if (songs.isEmpty()) return
-        dj.cancel()
         val cur = _state.value.current
         val keep = when {
             keepCurrent && cur != null -> songs.indexOfFirst { it.id == cur.id }.coerceAtLeast(0)
@@ -1448,7 +1406,6 @@ class HypochloritePlayer(
     fun clearQueue() {
         playGen += 1
         endedForId = null
-        dj.cancel()
         windowJob?.cancel()
         loadJob?.cancel()
         windowQueue.clear()
@@ -1594,7 +1551,6 @@ class HypochloritePlayer(
         windowJob?.cancel()
         windowQueue.clear()
         releaseExclusiveFocus()
-        dj.release()
         runCatching { wakeLock?.let { if (it.isHeld) it.release() } }
         wakeLock = null
         exo.release()

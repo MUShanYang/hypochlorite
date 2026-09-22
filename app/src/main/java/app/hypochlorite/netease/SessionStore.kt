@@ -340,14 +340,6 @@ class SessionStore(context: Context) {
         runCatching { prefs.edit().putString("quality_id", id).apply() }
     }
 
-    /** DJ 自动接歌：两首歌之间自动对速、按调性接，不开就是普通无缝切歌 */
-    fun isDjMix(): Boolean =
-        runCatching { prefs.getBoolean("dj_mix", false) }.getOrDefault(false)
-
-    fun saveDjMix(on: Boolean) {
-        runCatching { prefs.edit().putBoolean("dj_mix", on).apply() }
-    }
-
     // ------------------------------------------------------------------ HiFi 音频输出
     // 读写一律包 runCatching：这些 key 都在启动路径上被读，prefs 里类型一旦不符
     // （getBoolean/getInt 抛 ClassCastException）就会变成「打不开」。

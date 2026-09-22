@@ -25,7 +25,6 @@ import app.hypochlorite.ui.HoverBold
 import app.hypochlorite.ui.MonoText
 import app.hypochlorite.ui.clickableNoRipple
 import app.hypochlorite.ui.sections.AudioOutSection
-import app.hypochlorite.ui.sections.SwitchRow
 import app.hypochlorite.ui.theme.LocalHypochloriteColors
 import app.hypochlorite.ui.theme.argbHex
 import app.hypochlorite.ui.theme.hex
@@ -64,23 +63,6 @@ internal fun ConfigScreen(state: HomeState, vm: HypochloriteViewModel) {
             )
         }
         AudioOutSection(state, vm)
-        MonoText("播放", modifier = Modifier.padding(top = 28.dp))
-        Hairline(Modifier.padding(top = 8.dp))
-        SwitchRow(
-            label = "DJ 自动接歌",
-            on = state.djMix,
-            onClick = { vm.setDjMix(!state.djMix) },
-            modifier = Modifier.padding(top = 16.dp),
-        )
-        MonoText(
-            if (state.djMix) {
-                "开着。两首歌之间会自动对速度、按调性选接法，滤波和回响收尾，切歌没有断点。"
-            } else {
-                "开着之后，两首歌之间会自动对速度、按调性接过去，没有硬切。单曲循环时不接。"
-            },
-            muted = true,
-            modifier = Modifier.padding(top = 8.dp),
-        )
         MonoText("主题", modifier = Modifier.padding(top = 28.dp))
         Hairline(Modifier.padding(top = 8.dp))
         MonoText("显示模式", muted = true, size = 14, modifier = Modifier.padding(top = 12.dp))

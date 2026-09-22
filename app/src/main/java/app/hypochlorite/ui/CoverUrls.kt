@@ -10,6 +10,12 @@ object CoverUrls {
     /** 全屏虚化背景用：够糊、够小，不必原图 */
     const val BACKDROP_PX = 400
 
+    /** 列表缩略图：36~72dp 行，CDN 先缩再下 */
+    const val LIST_PX = 200
+
+    /** 详情页大封面 */
+    const val HERO_PX = 512
+
     fun sized(url: String, px: Int = BACKDROP_PX): String {
         if (url.isEmpty() || px <= 0) return url
         if (!isNeteaseCdn(url)) return url
