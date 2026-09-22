@@ -44,9 +44,7 @@ import app.hypochlorite.ui.theme.LocalHypochloriteColors
  */
 @Composable
 internal fun AudioOutSection(state: HomeState, vm: HypochloriteViewModel) {
-    val colors = LocalHypochloriteColors.current
     val a = state.audioOut
-    val hasUsb = state.usbDevices > 0
 
     MonoText("音频输出", modifier = Modifier.padding(top = 28.dp))
     Hairline(Modifier.padding(top = 8.dp))
@@ -60,25 +58,9 @@ internal fun AudioOutSection(state: HomeState, vm: HypochloriteViewModel) {
         onClick = { vm.setUsbExclusive(!a.usbExclusive) },
         modifier = Modifier.padding(top = 16.dp),
     )
-    MonoText(
-        when {
-            !hasUsb && !state.usbHostSupported ->
-                "这台机器没有 USB 音频，插了也认不出来。"
-            !hasUsb && a.usbExclusive ->
-                "设备拔了，声音回到默认出口。插上就自动接回来。"
-            !hasUsb -> "还没插解码器 / 小尾巴。插上就认。"
-            a.usbExclusive && state.usbExclusiveActive ->
-                "声音走 ${state.usbDeviceName ?: "USB 解码器"}。"
-            a.usbExclusive ->
-                "认到 ${state.usbDeviceName ?: "USB 解码器"} 了，但钉不住，声音还在默认出口。"
-            else -> "认到 ${state.usbDeviceName ?: "USB 解码器"} 了。点一下就能钉上去。"
-        },
-        color = if (a.usbExclusive && state.usbExclusiveActive) colors.text else colors.muted,
-        modifier = Modifier.padding(top = 8.dp),
-    )
 
     // --- 采样率匹配 ---
-    ResampleBlock(state, vm)
+    ResampleBlock(state)
 
     // --- 独占音频焦点 ---
     SwitchRow(
@@ -106,10 +88,8 @@ internal fun AudioOutSection(state: HomeState, vm: HypochloriteViewModel) {
         modifier = Modifier.padding(top = 14.dp),
     )
 
-    if (a.directVolume) {
-        // 直控开启时滑块失去意义（增益被强制 1.0），直接不显示，比显示一个假滑块干净
-        MonoText("精确音量用不上了，现在跟着系统音量键走。", muted = true, modifier = Modifier.padding(top = 10.dp))
-    } else {
+    // 直控开启时滑块失去意义（增益被强制 1.0），直接不显示
+    if (!a.directVolume) {
         GainSlider(
             percent = a.gainPercent,
             onChange = { vm.setGain(it) },
@@ -136,50 +116,30 @@ internal fun AudioOutSection(state: HomeState, vm: HypochloriteViewModel) {
  * 也不用「可能」「也许」糊过去 —— 宁可不说，也不给一个可能是假的警告。
  */
 @Composable
-private fun ResampleBlock(state: HomeState, vm: HypochloriteViewModel) {
+private fun ResampleBlock(state: HomeState) {
     MonoText("采样率匹配", modifier = Modifier.padding(top = 26.dp))
     Hairline(Modifier.padding(top = 8.dp))
 
     when {
-        state.sourceSampleRate == null -> MonoText(
-            "放一首歌就能看到。",
-            muted = true,
-            modifier = Modifier.padding(top = 12.dp),
-        )
+        state.sourceSampleRate == null -> Unit
 
         state.supportedRates.isEmpty() -> MonoText(
-            "音源 ${formatSampleRate(state.sourceSampleRate)} · " +
-                "解码器没说自己支持哪些采样率，看不出来会不会被转。",
+            "音源 ${formatSampleRate(state.sourceSampleRate)}",
             muted = true,
             modifier = Modifier.padding(top = 12.dp),
         )
 
-        state.willResample -> {
-            MonoText(
-                "${formatSampleRate(state.sourceSampleRate)} → " +
-                    "${formatSampleRate(state.nativeSampleRate)}  正在转一次",
-                modifier = Modifier.padding(top = 12.dp),
-            )
-            MonoText(
-                "解码器支持 ${state.supportedRates.joinToString(" / ") { formatSampleRate(it) }}，" +
-                    "现在的音源不在里面。换一档匹配的音质就能消掉，或者换只能吃这个采样率的解码器。",
-                muted = true,
-                modifier = Modifier.padding(top = 8.dp),
-            )
-        }
+        state.willResample -> MonoText(
+            "${formatSampleRate(state.sourceSampleRate)} → " +
+                "${formatSampleRate(state.nativeSampleRate)}  正在转一次",
+            modifier = Modifier.padding(top = 12.dp),
+        )
 
-        else -> {
-            MonoText(
-                "${formatSampleRate(state.sourceSampleRate)} → " +
-                    "${formatSampleRate(state.nativeSampleRate)}  直通",
-                modifier = Modifier.padding(top = 12.dp),
-            )
-            MonoText(
-                "音源和设备的采样率对上了，系统不转。这是普通 app 能摸到的最接近直通的状态。",
-                muted = true,
-                modifier = Modifier.padding(top = 8.dp),
-            )
-        }
+        else -> MonoText(
+            "${formatSampleRate(state.sourceSampleRate)} → " +
+                "${formatSampleRate(state.nativeSampleRate)}  直通",
+            modifier = Modifier.padding(top = 12.dp),
+        )
     }
 }
 
