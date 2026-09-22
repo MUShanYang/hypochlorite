@@ -111,7 +111,7 @@ fun HypochloriteRoot(vm: HypochloriteViewModel) {
                     )
                 }
 
-                // 一起听的操作反馈。长按推歌可能发生在任意列表页，房间页看不到 —— 所以挂根节点。
+                // 一起听的操作反馈。列表页点按/长按推歌都可能发生在任意页，房间页看不到 —— 所以挂根节点。
                 ListenToast(state.listen.toast, vm::clearListenToast)
             }
         }

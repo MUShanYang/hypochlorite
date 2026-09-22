@@ -254,6 +254,7 @@ private fun DailyFlow(state: HomeState, vm: HypochloriteViewModel) {
                 song = song,
                 onClick = { vm.playAll(state.dailySongs, i) },
                 onLongPress = { vm.listenPushSong(song) },
+                pushOnClick = state.listen.room != null,
                 on = state.player.current?.id == song.id,
                 isLiked = state.likedSongIds.contains(song.id),
                 index = i,

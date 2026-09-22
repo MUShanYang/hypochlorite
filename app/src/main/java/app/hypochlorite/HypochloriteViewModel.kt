@@ -545,7 +545,7 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
 
     fun listenNotify(message: String) = app.listen.notify(message)
 
-    /** 在任意歌曲列表里长按 → 把这首歌加进房间队列（不切歌）。 */
+    /** 把这首歌加进一起听房间队列（不切歌）。已进房时列表点击即推；未进房时长按仍可触发（会 toast）。 */
     fun listenPushSong(song: Song) = app.listen.addSongToRoomQueue(song)
 
     fun clearListenToast() = app.listen.clearToast()

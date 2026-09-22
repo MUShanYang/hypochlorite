@@ -103,6 +103,7 @@ internal fun ArtistScreen(artistName: String, state: HomeState, vm: Hypochlorite
                     song = song,
                     onClick = { vm.playAll(state.artistSongs, i) },
                     onLongPress = { vm.listenPushSong(song) },
+                    pushOnClick = state.listen.room != null,
                     on = state.player.current?.id == song.id,
                     isLiked = state.likedSongIds.contains(song.id),
                     index = i,

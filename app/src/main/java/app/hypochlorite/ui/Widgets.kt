@@ -310,6 +310,12 @@ fun SongRow(
     index: Int = 0,
     isLiked: Boolean = false,
     onLongPress: (() -> Unit)? = null,
+    /**
+     * 已在一起听房间时为 true：普通点击即推歌（琥珀 PUSH 横幅 + onLongPress）并照常 onClick 播放，
+     * 同时关闭长按推歌，避免一次手势推两次。
+     * 未进房时保持 false：点击只播，长按仍可推（无房会 toast「先进一个房间…」）。
+     */
+    pushOnClick: Boolean = false,
     highlight: String = "",
 ) {
     val interaction = remember { MutableInteractionSource() }
@@ -344,13 +350,14 @@ fun SongRow(
     // 横幅是否还在「盖上来」的阶段。行尾的 [播放中] 在这段时间里必须一直藏着 —— 见下面 graphicsLayer
     var bannerCovering by remember(song.id) { mutableStateOf(false) }
 
-    // 长按推歌的反馈色。点一下是 NEXT(取色白)，长按是 PUSH(琥珀)，两种意图别混
+    // 推歌反馈色。普通播放是 NEXT(取色白)，推歌是 PUSH(琥珀)，两种意图别混。
+    // pushOnClick=true 时点击就走 PUSH；否则仍靠长按出 PUSH。
     var bannerIsPush by remember(song.id) { mutableStateOf(false) }
 
     /**
      * 扫一次横幅。[prefix] 与 [name] 分别对应粗体前缀与歌曲名，[amber] 决定底色走 banner 还是琥珀。
      *
-     * 抽成函数是因为点击和长按走的是两条路（长按不能触发 onClick），
+     * 抽成函数是因为点击推歌 / 长按推歌 / 普通播放都需要同一套动画，
      * 但视觉必须一模一样 —— 复制一份迟早会改歪一边。
      */
     fun sweepBanner(prefix: String, name: String, amber: Boolean) {
@@ -384,10 +391,11 @@ fun SongRow(
     // 长按检测。不能用 clickable(onLongClick = ...)：它和 onClick 是互斥的，
     // 而且长按判定后 Compose 就不再派发 onClick —— 我们需要的是「点击照常，长按额外触发」。
     // 所以这里在底层自己判：按下后等 longPressTimeout，期间手指没动、没抬起 → 长按成立。
-    val longPressModifier = if (onLongPress == null) {
+    // pushOnClick 时点击已负责推歌，关掉长按以免双推。
+    val longPressModifier = if (onLongPress == null || pushOnClick) {
         Modifier
     } else {
-        Modifier.pointerInput(song.id) {
+        Modifier.pointerInput(song.id, pushOnClick) {
             val longPressMs = viewConfiguration.longPressTimeoutMillis
             val slop = viewConfiguration.touchSlop
             awaitEachGesture {
@@ -439,7 +447,12 @@ fun SongRow(
                 .fillMaxWidth()
                 .then(longPressModifier)
                 .clickable(interactionSource = interaction, indication = null) {
-                    sweepBanner("NEXT »", song.name, amber = false)
+                    if (pushOnClick) {
+                        sweepBanner("PUSH »", song.name, amber = true)
+                        onLongPress?.invoke()
+                    } else {
+                        sweepBanner("NEXT »", song.name, amber = false)
+                    }
                     onClick()
                 }
                 .padding(vertical = 6.dp),
