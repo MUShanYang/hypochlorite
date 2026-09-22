@@ -12,6 +12,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -41,6 +42,7 @@ import app.hypochlorite.HomeState
 import app.hypochlorite.HypochloriteViewModel
 import app.hypochlorite.Space
 import app.hypochlorite.netease.Playlist
+import app.hypochlorite.ui.BackArrowIcon
 import app.hypochlorite.ui.ExpandingSearch
 import app.hypochlorite.ui.Hairline
 import app.hypochlorite.ui.HoverBold
@@ -54,6 +56,7 @@ import app.hypochlorite.ui.TogetherIcon
 import app.hypochlorite.ui.clickableNoRipple
 import app.hypochlorite.ui.sections.MiniBar
 import app.hypochlorite.ui.theme.LocalHypochloriteColors
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -94,12 +97,30 @@ internal fun HomeScreen(state: HomeState, vm: HypochloriteViewModel) {
 
     BackHandler(enabled = state.searchOpen || searchFocused) { closeSearch() }
 
+    // 顶栏 ExpandingSearch 提到 AnimatedContent 外：home→search 时 SEARCH chip 原地拉长，
+    // 关闭时再缩回；AnimatedContent 只换下方内容（页签/结果 ↔ 空间页签/列表）。
+    LaunchedEffect(state.searchOpen) {
+        if (state.searchOpen) {
+            delay(32)
+            runCatching { searchFocusRequester.requestFocus() }
+        }
+    }
+
     Column(Modifier.fillMaxSize()) {
-        // 搜索页 ↔ 首页内容：淡入 + 轻微水平滑入，节奏对齐 HypochloriteRoot 路由切换。
-        // MiniBar 留在动画区外，底栏不跟着抖。
+        Header(
+            state = state,
+            vm = vm,
+            onToggleSearch = toggleSearch,
+            onCloseSearch = closeSearch,
+            searchFocusRequester = searchFocusRequester,
+            onSearchFocus = { searchFocused = it },
+        )
+        Hairline(Modifier.padding(horizontal = 14.dp))
         AnimatedContent(
             targetState = state.searchOpen,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
             transitionSpec = {
                 if (targetState) {
                     (fadeIn(tween(240)) + slideInHorizontally(tween(260)) { it / 10 }) togetherWith
@@ -111,39 +132,37 @@ internal fun HomeScreen(state: HomeState, vm: HypochloriteViewModel) {
             },
             label = "homeSearch",
         ) { open ->
-            if (open) {
-                SearchSurface(
-                    state = state,
-                    vm = vm,
-                    focusRequester = searchFocusRequester,
-                    onFocus = { searchFocused = it },
-                    onClose = closeSearch,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                Column(Modifier.fillMaxSize()) {
-                    Header(
-                        state,
-                        vm,
-                        onToggleSearch = toggleSearch,
-                        searchFocusRequester = searchFocusRequester,
-                        onSearchFocus = { searchFocused = it },
+            // 子树必须吃满 AnimatedContent 的有界高度，避免 HorizontalPager+weight 在部分机型上无限高崩溃。
+            Box(Modifier.fillMaxSize()) {
+                if (open) {
+                    SearchSurface(
+                        state = state,
+                        vm = vm,
+                        focusRequester = searchFocusRequester,
+                        onFocus = { searchFocused = it },
+                        onClose = closeSearch,
+                        includeHeader = false,
+                        modifier = Modifier.fillMaxSize(),
                     )
-                    Hairline(Modifier.padding(horizontal = 14.dp))
-                    SpaceTabs(
-                        selected = pager.currentPage,
-                        onSelect = { page ->
-                            scope.launch { pager.animateScrollToPage(page) }
-                        },
-                    )
-                    HorizontalPager(
-                        state = pager,
-                        modifier = Modifier.weight(1f),
-                    ) { page ->
-                        when (page) {
-                            0 -> PlaylistFlow(state.liked, state.loading, state.loggedIn, vm)
-                            1 -> PlaylistFlow(state.mine, state.loading, state.loggedIn, vm)
-                            else -> DailyFlow(state, vm)
+                } else {
+                    Column(Modifier.fillMaxSize()) {
+                        SpaceTabs(
+                            selected = pager.currentPage,
+                            onSelect = { page ->
+                                scope.launch { pager.animateScrollToPage(page) }
+                            },
+                        )
+                        HorizontalPager(
+                            state = pager,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth(),
+                        ) { page ->
+                            when (page) {
+                                0 -> PlaylistFlow(state.liked, state.loading, state.loggedIn, vm)
+                                1 -> PlaylistFlow(state.mine, state.loading, state.loggedIn, vm)
+                                else -> DailyFlow(state, vm)
+                            }
                         }
                     }
                 }
@@ -158,37 +177,71 @@ private fun Header(
     state: HomeState,
     vm: HypochloriteViewModel,
     onToggleSearch: () -> Unit,
+    onCloseSearch: () -> Unit,
     searchFocusRequester: FocusRequester,
     onSearchFocus: (Boolean) -> Unit,
 ) {
     val colors = LocalHypochloriteColors.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(start = 14.dp, end = 14.dp, top = 16.dp, bottom = 12.dp),
+            .padding(
+                start = if (state.searchOpen) 8.dp else 14.dp,
+                end = if (state.searchOpen) 8.dp else 14.dp,
+                top = if (state.searchOpen) 10.dp else 16.dp,
+                bottom = if (state.searchOpen) 8.dp else 12.dp,
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            Modifier
-                .clickableNoRipple { onToggleSearch() }
-                .padding(vertical = 4.dp, horizontal = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            LogoMark()
-            Spacer(Modifier.width(8.dp))
-            MonoText("Hypochlorite", bold = true, size = 22)
+        // 左侧：关闭时 Logo+标题；打开时返回键。与 ExpandingSearch 同生命周期，避免整页硬切。
+        AnimatedContent(
+            targetState = state.searchOpen,
+            transitionSpec = {
+                (fadeIn(tween(180)) togetherWith fadeOut(tween(120)))
+            },
+            label = "homeHeaderLeading",
+        ) { open ->
+            if (open) {
+                MiniIconButton(onClick = onCloseSearch) {
+                    BackArrowIcon(size = 18.dp)
+                }
+            } else {
+                Row(
+                    Modifier
+                        .clickableNoRipple { onToggleSearch() }
+                        .padding(vertical = 4.dp, horizontal = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    LogoMark()
+                    Spacer(Modifier.width(8.dp))
+                    MonoText("Hypochlorite", bold = true, size = 22)
+                }
+            }
         }
         ExpandingSearch(
             open = state.searchOpen,
             query = state.searchQuery,
             onQueryChange = vm::setSearchQuery,
             onOpen = { vm.setSearchOpen(true) },
-            onSearch = { vm.search() },
+            onSearch = {
+                keyboardController?.hide()
+                vm.search()
+            },
             focusRequester = searchFocusRequester,
             onFocus = onSearchFocus,
+            hint = if (state.searchOpen) "搜索" else "",
+            onClear = if (state.searchOpen) {
+                { vm.setSearchQuery("") }
+            } else {
+                null
+            },
             modifier = Modifier
                 .weight(1f)
-                .padding(start = 12.dp, end = 6.dp),
+                .padding(
+                    start = if (state.searchOpen) 0.dp else 12.dp,
+                    end = if (state.searchOpen) 2.dp else 6.dp,
+                ),
         )
         // 在房间里时这个图标常亮，点进去能看到房间和成员
         MiniIconButton(onClick = { vm.openListen() }) {

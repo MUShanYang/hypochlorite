@@ -90,6 +90,8 @@ internal fun SearchSurface(
     onFocus: (Boolean) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 首页把顶栏提到 AnimatedContent 外做 SEARCH 拉长时传 false，只渲染页签+结果。 */
+    includeHeader: Boolean = true,
 ) {
     val pager = rememberPagerState(initialPage = 0, pageCount = { SearchTab.entries.size })
     val scope = rememberCoroutineScope()
@@ -100,24 +102,28 @@ internal fun SearchSurface(
         snapshotFlow { pager.targetPage }.collect { page -> selectedTab = page }
     }
 
-    LaunchedEffect(Unit) {
-        delay(32)
-        runCatching { focusRequester.requestFocus() }
+    if (includeHeader) {
+        LaunchedEffect(Unit) {
+            delay(32)
+            runCatching { focusRequester.requestFocus() }
+        }
     }
 
     Column(modifier.fillMaxSize()) {
-        SearchHeader(
-            state = state,
-            vm = vm,
-            focusRequester = focusRequester,
-            onFocus = onFocus,
-            onClose = onClose,
-            onSearch = {
-                keyboard?.hide()
-                vm.search()
-            },
-        )
-        Hairline(Modifier.padding(horizontal = 14.dp))
+        if (includeHeader) {
+            SearchHeader(
+                state = state,
+                vm = vm,
+                focusRequester = focusRequester,
+                onFocus = onFocus,
+                onClose = onClose,
+                onSearch = {
+                    keyboard?.hide()
+                    vm.search()
+                },
+            )
+            Hairline(Modifier.padding(horizontal = 14.dp))
+        }
         SearchTabs(
             selected = selectedTab,
             onSelect = { page ->
