@@ -1,6 +1,8 @@
 package app.hypochlorite.ui.screens
 
+import android.content.Intent
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,12 +17,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import app.hypochlorite.HomeState
 import app.hypochlorite.HypochloriteViewModel
 import app.hypochlorite.netease.Crypto
@@ -38,9 +46,21 @@ import app.hypochlorite.ui.theme.Warn
 @Composable
 internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
     val colors = LocalHypochloriteColors.current
+    val context = LocalContext.current
     val lt = state.listen
     val room = lt.room
     val kind = remember { mutableStateOf(ListenRoomKind.Duo) }
+    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        val raw = result.contents?.trim().orEmpty()
+        if (raw.isEmpty()) return@rememberLauncherForActivityResult
+        vm.setListenInput(raw)
+        vm.listenJoinRoom(raw)
+    }
+    var seated by remember { mutableStateOf(room != null) }
+    LaunchedEffect(room?.roomId) {
+        if (room != null) seated = true
+        else if (seated) vm.dismissListenScreen()
+    }
     BackHandler { vm.back() }
     Column(
         Modifier
@@ -64,7 +84,9 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
         }
         Hairline()
 
-        if (room == null) {
+        if (room == null && seated) {
+            MonoText("一起听已经结束了", modifier = Modifier.padding(top = 20.dp))
+        } else if (room == null) {
             MonoText("和朋友听同一首、同一刻", modifier = Modifier.padding(top = 20.dp), bold = true, size = 20)
             if (!state.loggedIn) {
                 MonoText(
@@ -107,7 +129,7 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
                 MonoText("加入房间", modifier = Modifier.padding(top = 28.dp))
                 Hairline(Modifier.padding(top = 8.dp))
                 MonoText(
-                    "贴朋友发来的邀请链接。房间号和邀请人中间留个空格也行。",
+                    "贴朋友发来的邀请链接，或者扫邀请二维码。房间号和邀请人中间留个空格也行。",
                     muted = true,
                     size = 13,
                     modifier = Modifier.padding(top = 10.dp),
@@ -120,12 +142,27 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
                     onGo = { vm.listenJoinRoom() },
                     modifier = Modifier.padding(top = 12.dp),
                 )
-                HoverBold(
-                    "> 加入",
-                    onClick = { vm.listenJoinRoom() },
-                    modifier = Modifier.padding(top = 6.dp),
-                    on = state.listenInput.isNotEmpty() && !lt.syncing,
-                )
+                Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                    HoverBold(
+                        "> 扫码加入",
+                        onClick = {
+                            val options = ScanOptions().apply {
+                                setBeepEnabled(false)
+                                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                                setPrompt("把一起听的邀请二维码放进来")
+                            }
+                            runCatching { scanLauncher.launch(options) }.onFailure {
+                                vm.listenNote("这台机器开不了相机，改贴链接吧")
+                            }
+                        },
+                        on = !lt.syncing,
+                    )
+                    HoverBold(
+                        "> 加入",
+                        onClick = { vm.listenJoinRoom() },
+                        on = state.listenInput.isNotEmpty() && !lt.syncing,
+                    )
+                }
             }
             lt.error?.takeIf { it.isNotEmpty() }?.let { message ->
                 MonoText(message, color = Warn, size = 13, modifier = Modifier.padding(top = 18.dp))
@@ -151,6 +188,21 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
                     HoverBold(
                         "复制邀请链接",
                         onClick = { vm.copyText(shareUrl, "链接复制好了，用网易云打开就能进") },
+                        padV = 9,
+                    )
+                    HoverBold(
+                        "分享邀请",
+                        onClick = {
+                            val send = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, shareUrl)
+                            }
+                            runCatching {
+                                context.startActivity(Intent.createChooser(send, "分享邀请"))
+                            }.onFailure {
+                                vm.listenNotify("分享没能打开")
+                            }
+                        },
                         padV = 9,
                     )
                 }
@@ -223,6 +275,12 @@ internal fun ListenTogetherScreen(state: HomeState, vm: HypochloriteViewModel) {
                 muted = true,
                 size = 13,
                 modifier = Modifier.padding(top = 10.dp),
+            )
+            MonoText(
+                "加歌、删歌、调顺序都会同步过去。",
+                muted = true,
+                size = 12,
+                modifier = Modifier.padding(top = 4.dp),
             )
             lt.roomQueue.take(30).forEachIndexed { i, song ->
                 val nowPlaying = state.player.current?.id == song.id

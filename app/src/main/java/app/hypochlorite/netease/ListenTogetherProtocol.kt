@@ -289,6 +289,19 @@ private fun translateListenMessage(raw: String, code: Int): String = when {
 fun isValidListenRoomId(value: String): Boolean =
     value.length in 1..256 && value.all { it.isLetterOrDigit() || it == '_' || it == '-' }
 
+/**
+ * 队列和上次上报不一样，才补一次列表同步。
+ * 空队列表达不了：播放指令必须带一首目标歌，空列表会被对方用 targetSongId 填回来。
+ */
+fun listenQueueNeedsSync(inRoom: Boolean, queueIds: List<Long>, reportedIds: List<Long>): Boolean =
+    inRoom && queueIds.isNotEmpty() && queueIds != reportedIds
+
+/** 只改队列、不切歌。指令保持当前的播放或暂停，避免对方把这次当成重新开播。 */
+fun listenQueueEditCommand(playing: Boolean): String = if (playing) "PLAY" else "PAUSE"
+
+/** 一起听时队列不能被收成空的，否则下一轮轮询会把房间里的歌填回来。 */
+fun listenCanDropQueueTo(inRoom: Boolean, sizeAfter: Int): Boolean = !inRoom || sizeAfter > 0
+
 private fun decodePercentAscii(value: String): String = buildString(value.length) {
     var index = 0
     while (index < value.length) {
