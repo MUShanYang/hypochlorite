@@ -14,9 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
@@ -39,19 +37,16 @@ import app.hypochlorite.netease.Playlist
 import app.hypochlorite.ui.ExpandingSearch
 import app.hypochlorite.ui.Hairline
 import app.hypochlorite.ui.HoverBold
-import app.hypochlorite.ui.ListJumpEffect
 import app.hypochlorite.ui.LogoMark
 import app.hypochlorite.ui.MiniIconButton
 import app.hypochlorite.ui.MonoText
 import app.hypochlorite.ui.PlaylistRow
 import app.hypochlorite.ui.SettingsIcon
 import app.hypochlorite.ui.SongRow
-import app.hypochlorite.ui.SongRowHeight
 import app.hypochlorite.ui.TogetherIcon
 import app.hypochlorite.ui.clickableNoRipple
 import app.hypochlorite.ui.sections.MiniBar
 import app.hypochlorite.ui.theme.LocalHypochloriteColors
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -83,10 +78,7 @@ internal fun HomeScreen(state: HomeState, vm: HypochloriteViewModel) {
     }
 
     LaunchedEffect(state.searchOpen) {
-        if (state.searchOpen) {
-            delay(260)
-            runCatching { searchFocusRequester.requestFocus() }
-        } else {
+        if (!state.searchOpen) {
             searchFocused = false
             focusManager.clearFocus()
             keyboardController?.hide()
@@ -95,34 +87,31 @@ internal fun HomeScreen(state: HomeState, vm: HypochloriteViewModel) {
 
     BackHandler(enabled = state.searchOpen || searchFocused) { closeSearch() }
 
-    val searchShown = state.searchOpen
-
     Column(Modifier.fillMaxSize()) {
-        Header(
-            state,
-            vm,
-            onToggleSearch = toggleSearch,
-            searchFocusRequester = searchFocusRequester,
-            onSearchFocus = { searchFocused = it },
-        )
-        Hairline(Modifier.padding(horizontal = 14.dp))
-        if (searchShown && state.searchMsg.isNotEmpty()) {
-            val colors = LocalHypochloriteColors.current
-            MonoText(
-                state.searchMsg,
-                color = if (state.searchMsg.contains("没有") || state.searchMsg.contains("输入")) colors.warning else colors.text,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        if (state.searchOpen) {
+            SearchSurface(
+                state = state,
+                vm = vm,
+                focusRequester = searchFocusRequester,
+                onFocus = { searchFocused = it },
+                onClose = closeSearch,
+                modifier = Modifier.weight(1f),
             )
-        }
-        SpaceTabs(
-            selected = pager.currentPage,
-            onSelect = { page ->
-                scope.launch { pager.animateScrollToPage(page) }
-            },
-        )
-        if (searchShown && (state.searchPlaylists.isNotEmpty() || state.searchSongs.isNotEmpty() || state.searchMsg.isNotEmpty())) {
-            SearchResults(state, vm, Modifier.weight(1f))
         } else {
+            Header(
+                state,
+                vm,
+                onToggleSearch = toggleSearch,
+                searchFocusRequester = searchFocusRequester,
+                onSearchFocus = { searchFocused = it },
+            )
+            Hairline(Modifier.padding(horizontal = 14.dp))
+            SpaceTabs(
+                selected = pager.currentPage,
+                onSelect = { page ->
+                    scope.launch { pager.animateScrollToPage(page) }
+                },
+            )
             HorizontalPager(
                 state = pager,
                 modifier = Modifier.weight(1f),
@@ -206,48 +195,6 @@ private fun SpaceTabs(selected: Int, onSelect: (Int) -> Unit) {
                 color = if (i == selected) colors.text else colors.muted,
                 on = i == selected,
             )
-        }
-    }
-}
-
-@Composable
-private fun SearchResults(state: HomeState, vm: HypochloriteViewModel, modifier: Modifier) {
-    val listState = rememberLazyListState()
-    ListJumpEffect(
-        listState = listState,
-        target = state.pendingListJump,
-        seq = state.listJumpSeq,
-        itemHeight = SongRowHeight,
-        onDone = { vm.clearListJump() },
-    )
-    LazyColumn(
-        state = listState,
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 14.dp, end = 14.dp, bottom = 20.dp),
-    ) {
-        if (state.searchPlaylists.isNotEmpty()) {
-            item { MonoText("[相关歌单]", muted = true, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)) }
-            itemsIndexed(state.searchPlaylists, key = { i, pl -> "sp-${pl.id}-$i" }) { i, pl ->
-                PlaylistRow(
-                    playlist = pl,
-                    onClick = { vm.openPlaylist(pl) },
-                    index = i,
-                    modifier = Modifier.animateItem(),
-                )
-            }
-        }
-        if (state.searchSongs.isNotEmpty()) {
-            item { MonoText("[单曲列表]", muted = true, modifier = Modifier.padding(top = 20.dp, bottom = 4.dp)) }
-            itemsIndexed(state.searchSongs, key = { i, song -> "ss-${song.id}-$i" }) { i, song ->
-                SongRow(
-                    song = song,
-                    onClick = { vm.playSong(song) },
-                    onLongPress = { vm.listenPushSong(song) },
-                    on = state.player.current?.id == song.id,
-                    isLiked = state.likedSongIds.contains(song.id),
-                    index = i,
-                )
-            }
         }
     }
 }

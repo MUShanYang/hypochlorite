@@ -26,6 +26,20 @@ data class Album(
     val description: String = "",
 )
 
+/**
+ * 搜索命中的歌手。
+ *
+ * cloudsearch 的歌手对象不带粉丝数，综合页只展示曲目数和专辑数。
+ */
+data class Artist(
+    val id: String,
+    val name: String,
+    val cover: String = "",
+    val alias: String = "",
+    val musicSize: Int = 0,
+    val albumSize: Int = 0,
+)
+
 data class Playlist(
     val id: String,
     val name: String,
@@ -34,6 +48,7 @@ data class Playlist(
     val creatorId: String? = null,
     val subscribed: Boolean = false,
     val specialType: Int = 0,
+    val creatorName: String = "",
 )
 
 data class Profile(
