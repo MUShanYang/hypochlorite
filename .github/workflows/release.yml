@@ -73,7 +73,9 @@ jobs:
           out="hypochlorite-${GITHUB_REF_NAME}.apk"
           cp app/build/outputs/apk/release/app-release.apk "$out"
 
-          prev=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          # 只看版本 tag —— nightly-<sha> 那些 prerelease tag 不能被当成「上一个正式版」，
+          # 否则首次发布的变更列表会从最近一个 nightly 起算，几乎什么都不显示。
+          prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${GITHUB_REF_NAME}^" 2>/dev/null || true)
           {
             echo "## 变更"
             echo
