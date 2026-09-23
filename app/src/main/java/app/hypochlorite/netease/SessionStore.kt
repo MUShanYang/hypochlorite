@@ -272,7 +272,7 @@ class SessionStore(context: Context) {
     // 这些全是可再生的缓存，读不到就直接回退默认值，绝不能拖垮启动。
 
     fun getThemeMode(): String =
-        runCatching { prefs.getString("theme_mode", "dark") ?: "dark" }.getOrDefault("dark")
+        runCatching { prefs.getString("theme_mode", "system") ?: "system" }.getOrDefault("system")
 
     fun saveThemeMode(mode: String) {
         prefs.edit().putString("theme_mode", mode).apply()

@@ -69,8 +69,8 @@ enum class ThemeMode(val id: String, val label: String) {
     companion object {
         fun fromId(id: String?): ThemeMode = when (id) {
             "light" -> Light
-            "system" -> System
-            else -> Dark
+            "dark" -> Dark
+            else -> System
         }
     }
 }
@@ -302,7 +302,7 @@ data class HomeState(
     val showVerify: Boolean = false,
     val player: PlayerSnapshot = PlayerSnapshot(),
     val likedSongIds: Set<String> = emptySet(),
-    val themeMode: ThemeMode = ThemeMode.Dark,
+    val themeMode: ThemeMode = ThemeMode.System,
     val palette: MonetPalette = MonetPalette.Mono,
     val reveal: ThemeReveal? = null,
     val songTransitionDir: Int = 1,
