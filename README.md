@@ -50,4 +50,7 @@ MIT，见 [LICENSE](LICENSE)。
 ## 致谢
 https://github.com/neteasecloudmusicapienhanced/api-enhanced
 
-Hydrogen-Music。
+https://github.com/chuxuehaocai/Lazer
+
+Hydrogen-Music （已删库）
+
