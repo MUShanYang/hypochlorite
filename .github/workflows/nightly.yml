@@ -15,12 +15,12 @@ jobs:
   build-and-publish:
     runs-on: ubuntu-latest
     env:
-      # 都是可选的：仓库不设 secrets 也能构建，只是 debug 包用 AGP 自己生成的签名，
-      # 换 runner 后覆盖安装要先卸载。四个一起配，缺一个签名会失败。
-      HYPO_KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-      HYPO_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-      HYPO_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-      HYPO_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      # nightly 专用密钥，和正式发布密钥（release.yml 用的那套 KEYSTORE_*）严格分开：
+      # 固定签名让同一台机器上的 nightly 能直接覆盖升级，但绝不拿正式发布密钥去签 debug 包。
+      HYPO_KEYSTORE_BASE64: ${{ secrets.NIGHTLY_KEYSTORE_BASE64 }}
+      HYPO_KEYSTORE_PASSWORD: ${{ secrets.NIGHTLY_KEYSTORE_PASSWORD }}
+      HYPO_KEY_ALIAS: ${{ secrets.NIGHTLY_KEY_ALIAS }}
+      HYPO_KEY_PASSWORD: ${{ secrets.NIGHTLY_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
         with:

@@ -1,0 +1,108 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    env:
+      # 正式发布密钥。和 nightly 那套分开配 —— nightly 的 debug 包不许带正式签名。
+      HYPO_KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      HYPO_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      HYPO_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      HYPO_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # 正式包一旦装出去，versionCode 就只能往前走，退不回来。所以 tag 和 build.gradle.kts
+      # 里写的版本必须一致，否则会出现「tag 说 1.1.0、包里写着 1.0.0」这种没法挽回的发布。
+      - name: Check tag matches versionName
+        run: |
+          declared=$(tr -d '\r' < app/build.gradle.kts | sed -n 's/^[[:space:]]*versionName = "\(.*\)"/\1/p' | head -1)
+          code=$(tr -d '\r' < app/build.gradle.kts | sed -n 's/^[[:space:]]*versionCode = \([0-9]*\).*/\1/p' | head -1)
+          echo "tag=${GITHUB_REF_NAME}  versionName=$declared  versionCode=$code"
+          if [ "v$declared" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} 与 app/build.gradle.kts 的 versionName \"$declared\" 不一致"
+            exit 1
+          fi
+          if [ -z "$code" ] || [ "$code" -lt 1 ]; then
+            echo "::error::versionCode 无效: '$code'"
+            exit 1
+          fi
+
+      - name: Restore signing keystore
+        run: |
+          if [ -z "$HYPO_KEYSTORE_BASE64" ]; then
+            echo "::error::缺少 KEYSTORE_BASE64 secret —— 正式发布必须签名，不能出未签名包"
+            exit 1
+          fi
+          printf '%s' "$HYPO_KEYSTORE_BASE64" | base64 --decode > release.p12
+          echo "HYPO_KEYSTORE_FILE=$GITHUB_WORKSPACE/release.p12" >> "$GITHUB_ENV"
+
+      - name: Assemble release APK
+        run: ./gradlew :app:assembleRelease --stacktrace
+
+      # 签错密钥的包发出去就收不回来了（同 versionCode 无法覆盖，用户装的包互不兼容）。
+      - name: Verify APK signature
+        run: |
+          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs \
+            app/build/outputs/apk/release/app-release.apk
+
+      - name: Remove signing keystore
+        if: always()
+        run: rm -f release.p12
+
+      - name: Prepare APK and release notes
+        id: pkg
+        run: |
+          out="hypochlorite-${GITHUB_REF_NAME}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$out"
+
+          prev=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          {
+            echo "## 变更"
+            echo
+            if [ -n "$prev" ]; then
+              git log --reverse --pretty=format:'- %s (`%h`)' "${prev}..${GITHUB_REF_NAME}"
+            else
+              git log --reverse --pretty=format:'- %s (`%h`)' "${GITHUB_REF_NAME}"
+            fi
+            echo
+            echo
+            echo "- 版本: \`${GITHUB_REF_NAME}\`"
+            echo "- 安装包: \`${out}\`"
+            echo "- 工作流: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > release-notes.md
+
+          echo "path=$out" >> "$GITHUB_OUTPUT"
+          cat release-notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hypochlorite-${{ github.ref_name }}-apk
+          path: ${{ steps.pkg.outputs.path }}
+          if-no-files-found: error
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Hypochlorite ${{ github.ref_name }}
+          prerelease: false
+          make_latest: true
+          files: ${{ steps.pkg.outputs.path }}
+          body_path: release-notes.md
