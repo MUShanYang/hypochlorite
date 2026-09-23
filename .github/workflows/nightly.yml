@@ -2,6 +2,10 @@ name: Nightly
 
 on:
   push:
+    # 只跟分支推送。裸 `push:` 也会匹配 tag，所以打正式发布 tag 时会顺带触发出一个
+    # nightly-<sha> 的 prerelease —— 和 release.yml 的正式包重复。
+    branches:
+      - '**'
   workflow_dispatch:
 
 concurrency:

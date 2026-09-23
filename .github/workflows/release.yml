@@ -60,7 +60,12 @@ jobs:
       # 签错密钥的包发出去就收不回来了（同 versionCode 无法覆盖，用户装的包互不兼容）。
       - name: Verify APK signature
         run: |
-          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs \
+          # build-tools/*/apksigner 在 runner 上会匹配到多个版本，glob 展开成多个词之后，
+          # 第二个路径会被当成第一个 apksigner 的子命令参数 —— 报 "Unsupported command"。
+          # 所以显式取版本号最大的那一个。
+          apksigner=$(printf '%s\n' "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          echo "using $apksigner"
+          "$apksigner" verify --print-certs \
             app/build/outputs/apk/release/app-release.apk
 
       - name: Remove signing keystore
