@@ -381,7 +381,7 @@ private fun Comprehensive(
                 SongRow(
                     song = song,
                     onClick = { vm.playAll(songs.items, i) },
-                    onLongPress = { vm.listenPushSong(song) },
+                    onPush = { vm.listenPushSong(song) },
                     pushOnClick = inRoom,
                     on = currentId == song.id,
                     isLiked = likedIds.contains(song.id),
@@ -511,7 +511,7 @@ private fun SongResults(
             SongRow(
                 song = song,
                 onClick = { vm.playAll(songs.items, i) },
-                onLongPress = { vm.listenPushSong(song) },
+                onPush = { vm.listenPushSong(song) },
                 pushOnClick = inRoom,
                 on = currentId == song.id,
                 isLiked = likedIds.contains(song.id),

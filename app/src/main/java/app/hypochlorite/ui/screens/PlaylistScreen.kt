@@ -120,7 +120,7 @@ private fun PlaylistTracks(
             SongRow(
                 song = song,
                 onClick = { vm.playAll(songs, i) },
-                onLongPress = { vm.listenPushSong(song) },
+                onPush = { vm.listenPushSong(song) },
                 pushOnClick = inRoom,
                 on = currentId == song.id,
                 isLiked = likedIds.contains(song.id),

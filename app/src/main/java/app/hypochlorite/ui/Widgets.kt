@@ -82,9 +82,7 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -126,7 +124,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 
 fun fmtTime(ms: Long): String {
     if (ms <= 0L) return "0:00"
@@ -309,11 +306,11 @@ fun SongRow(
     on: Boolean = false,
     index: Int = 0,
     isLiked: Boolean = false,
-    onLongPress: (() -> Unit)? = null,
+    /** 把这首歌推进一起听房间。只在 [pushOnClick] 为 true 时被点击触发。 */
+    onPush: (() -> Unit)? = null,
     /**
-     * 已在一起听房间时为 true：普通点击即推歌（琥珀 PUSH 横幅 + onLongPress）并照常 onClick 播放，
-     * 同时关闭长按推歌，避免一次手势推两次。
-     * 未进房时保持 false：点击只播，长按仍可推（无房会 toast「先进一个房间…」）。
+     * 已在一起听房间时为 true：普通点击即推歌（琥珀 PUSH 横幅 + [onPush]）并照常 onClick 播放。
+     * 未进房时保持 false：点击只播不发任何推歌动作（长按推歌已移除）。
      */
     pushOnClick: Boolean = false,
     highlight: String = "",
@@ -351,14 +348,14 @@ fun SongRow(
     var bannerCovering by remember(song.id) { mutableStateOf(false) }
 
     // 推歌反馈色。普通播放是 NEXT(取色白)，推歌是 PUSH(琥珀)，两种意图别混。
-    // pushOnClick=true 时点击就走 PUSH；否则仍靠长按出 PUSH。
+    // pushOnClick=true 时点击就走 PUSH。
     var bannerIsPush by remember(song.id) { mutableStateOf(false) }
 
     /**
      * 扫一次横幅。[prefix] 与 [name] 分别对应粗体前缀与歌曲名，[amber] 决定底色走 banner 还是琥珀。
      *
-     * 抽成函数是因为点击推歌 / 长按推歌 / 普通播放都需要同一套动画，
-     * 但视觉必须一模一样 —— 复制一份迟早会改歪一边。
+     * 抽成函数是因为推歌和普通播放是两条不同的反馈，但视觉必须一模一样 ——
+     * 复制一份迟早会改歪一边。
      */
     fun sweepBanner(prefix: String, name: String, amber: Boolean) {
         bannerPrefix = prefix
@@ -388,52 +385,6 @@ fun SongRow(
         }
     }
 
-    // 长按检测。不能用 clickable(onLongClick = ...)：它和 onClick 是互斥的，
-    // 而且长按判定后 Compose 就不再派发 onClick —— 我们需要的是「点击照常，长按额外触发」。
-    // 所以这里在底层自己判：按下后等 longPressTimeout，期间手指没动、没抬起 → 长按成立。
-    // pushOnClick 时点击已负责推歌，关掉长按以免双推。
-    val longPressModifier = if (onLongPress == null || pushOnClick) {
-        Modifier
-    } else {
-        Modifier.pointerInput(song.id, pushOnClick) {
-            val longPressMs = viewConfiguration.longPressTimeoutMillis
-            val slop = viewConfiguration.touchSlop
-            awaitEachGesture {
-                val down = awaitFirstDown(requireUnconsumed = false)
-                val held = withTimeoutOrNull(longPressMs) {
-                    while (true) {
-                        val e = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: return@withTimeoutOrNull false
-                        // 手指动了 = 用户在滚列表，不是长按
-                        if ((e.position - e.previousPosition).getDistance() > slop) return@withTimeoutOrNull false
-                        // 抬手了 = 普通点击，交给 clickable 处理
-                        if (!e.pressed) return@withTimeoutOrNull false
-                    }
-                    @Suppress("UNREACHABLE_CODE") false
-                }
-                if (held == null) {
-                    sweepBanner("PUSH »", song.name, amber = true)
-                    onLongPress()
-                    // 关键：把这次手势「消费」掉，否则松手时 clickable 仍会收到 UP 并当成一次点击，
-                    // 表现为「长按推歌之后又播了一遍」。consumed 会顺着 pointer 事件的 pass 传出去，
-                    // 让同一条链路上的 clickable 检测到「已被别人处理」而放弃。
-                    //
-                    // 这里要用 `e.positionChange()` 先把位移读掉再 `consumePositionChange()` ——
-                    // clickable 判的是「位置变化有没有被消费」，直接 consume() 只标记 downChange，拦不住它。
-                    down.consume()
-                    // 等手指真的抬起来再消费一次（此时才有要消费的位移变化）
-                    withTimeoutOrNull(longPressMs) {
-                        while (true) {
-                            val e = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
-                            e.positionChange()
-                            e.consumePositionChange()
-                            if (!e.pressed) break
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -445,11 +396,10 @@ fun SongRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .then(longPressModifier)
                 .clickable(interactionSource = interaction, indication = null) {
                     if (pushOnClick) {
                         sweepBanner("PUSH »", song.name, amber = true)
-                        onLongPress?.invoke()
+                        onPush?.invoke()
                     } else {
                         sweepBanner("NEXT »", song.name, amber = false)
                     }

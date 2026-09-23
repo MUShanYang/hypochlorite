@@ -75,7 +75,7 @@ fun HypochloriteRoot(vm: HypochloriteViewModel) {
                 QueueHost(uiState, vm)
                 VerifyHost(uiState, vm)
                 RoamHost(uiState, vm)
-                // 一起听的操作反馈。列表页点按/长按推歌都可能发生在任意页，房间页看不到 —— 所以挂根节点。
+                // 一起听的操作反馈。列表页点按推歌可能发生在任意页，房间页看不到 —— 所以挂根节点。
                 ToastHost(uiState, vm)
             }
         }
