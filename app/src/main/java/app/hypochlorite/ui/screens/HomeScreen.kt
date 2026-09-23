@@ -49,7 +49,6 @@ import app.hypochlorite.ui.BackArrowIcon
 import app.hypochlorite.ui.ExpandingSearch
 import app.hypochlorite.ui.Hairline
 import app.hypochlorite.ui.HoverBold
-import app.hypochlorite.ui.LogoMark
 import app.hypochlorite.ui.MiniIconButton
 import app.hypochlorite.ui.MonoText
 import app.hypochlorite.ui.PlaylistRow
@@ -237,8 +236,6 @@ private fun Header(
                         .padding(vertical = 4.dp, horizontal = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    LogoMark()
-                    Spacer(Modifier.width(8.dp))
                     MonoText("Hypochlorite", bold = true, size = 22)
                 }
             }

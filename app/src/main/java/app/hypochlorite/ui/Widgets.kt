@@ -461,66 +461,79 @@ fun SongRow(
             Cover(song.cover, modifier = Modifier.size(36.dp))
             Spacer(Modifier.width(10.dp))
             val colors = LocalHypochloriteColors.current
-            Column(Modifier.weight(1f)) {
-                val mark = highlight.isNotBlank() && !on
-                if (mark) {
-                    HighlightText(
-                        text = song.name,
-                        query = highlight,
-                        bold = pressed,
-                        maxLines = 1,
-                        marquee = true,
-                        size = 14,
-                    )
-                } else {
-                    MonoText(
-                        text = song.name,
-                        bold = on || pressed,
-                        color = if (on) colors.accent else Color.Unspecified,
-                        maxLines = 1,
-                        marquee = true,
-                        size = 14,
-                    )
-                }
-                val artist = song.artists.joinToString(" / ").ifEmpty { song.album }
-                if (artist.isNotEmpty()) {
-                    if (mark) {
-                        HighlightText(
-                            text = artist,
-                            query = highlight,
-                            muted = true,
-                            maxLines = 1,
-                            marquee = true,
-                            size = 11,
-                            modifier = Modifier.padding(top = 2.dp),
-                        )
-                    } else {
+            // 保留退出的播放样式，让上一首的文字和标记一起淡出。
+            Crossfade(
+                targetState = on,
+                modifier = Modifier.weight(1f),
+                animationSpec = tween(240),
+                label = "song_row_playing",
+            ) { playing ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        val mark = highlight.isNotBlank() && !playing
+                        if (mark) {
+                            HighlightText(
+                                text = song.name,
+                                query = highlight,
+                                bold = pressed,
+                                maxLines = 1,
+                                marquee = true,
+                                size = 14,
+                            )
+                        } else {
+                            MonoText(
+                                text = song.name,
+                                bold = playing || pressed,
+                                color = if (playing) colors.accent else Color.Unspecified,
+                                maxLines = 1,
+                                marquee = true,
+                                size = 14,
+                            )
+                        }
+                        val artist = song.artists.joinToString(" / ").ifEmpty { song.album }
+                        if (artist.isNotEmpty()) {
+                            if (mark) {
+                                HighlightText(
+                                    text = artist,
+                                    query = highlight,
+                                    muted = true,
+                                    maxLines = 1,
+                                    marquee = true,
+                                    size = 11,
+                                    modifier = Modifier.padding(top = 2.dp),
+                                )
+                            } else {
+                                MonoText(
+                                    text = artist,
+                                    muted = !playing,
+                                    color = if (playing) Color.Unspecified else colors.muted,
+                                    maxLines = 1,
+                                    marquee = true,
+                                    size = 11,
+                                    modifier = Modifier.padding(top = 2.dp),
+                                )
+                            }
+                        }
+                    }
+                    if (playing) {
+                        Spacer(Modifier.width(8.dp))
                         MonoText(
-                            text = artist,
-                            muted = !on,
-                            color = if (on) Color.Unspecified else colors.muted,
-                            maxLines = 1,
-                            marquee = true,
-                            size = 11,
-                            modifier = Modifier.padding(top = 2.dp),
+                            "[播放中]",
+                            color = colors.accent,
+                            size = 13,
+                            bold = true,
+                            // 横幅从左往右擦入，行尾这个标记要等横幅把它盖住、盖满之后才该存在。
+                            // 覆盖阶段整段藏掉，否则开头几百毫秒它会孤零零留在右侧没被盖到的地方 —— 露馅。
+                            modifier = Modifier.graphicsLayer {
+                                // 外层有同名的入场 alpha(Animatable)，必须用 this.alpha 指 layer 作用域
+                                this.alpha = if (bannerCovering) 0f else 1f
+                            },
                         )
                     }
                 }
-            }
-            if (on) {
-                Spacer(Modifier.width(8.dp))
-                MonoText(
-                    "[播放中]",
-                    color = colors.accent,
-                    size = 13,
-                    bold = true,
-                    // 横幅从左往右擦入，行尾这个标记要等横幅把它盖住、盖满之后才该存在。
-                    // 覆盖阶段整段藏掉，否则开头几百毫秒它会孤零零留在右侧没被盖到的地方 —— 露馅。
-                    modifier = Modifier.graphicsLayer {
-                        // 外层有同名的入场 alpha(Animatable)，必须用 this.alpha 指 layer 作用域
-                        this.alpha = if (bannerCovering) 0f else 1f
-                    },
-                )
             }
         }
 
@@ -1167,6 +1180,9 @@ fun CornerAccents(
  * 5. 若新封面或音频正在加载，持续保持「口 + 小方块」定格在中心（作为加载态）；
  * 6. 等封面与音频加载就绪后：正方形裂开，角标向四周炸开归位（顺手换另一组对角），
  *    **同时**背景方块从角框里放大铺满；新封面从中心钻洞出来。
+ *
+ * [showCorners] 为 false 时只演取色方块那几段，不画四角角标（底栏缩略图用，用户
+ * 2026-09-23 要求去掉底栏绘制的角）。
  */
 @Composable
 fun KineticCoverFrame(
@@ -1178,6 +1194,7 @@ fun KineticCoverFrame(
     modifier: Modifier = Modifier,
     playSecondHalfOnEnter: Boolean = false,
     isAudioReady: Boolean = true,
+    showCorners: Boolean = true,
 ) {
     val context = LocalContext.current
     val colors = LocalHypochloriteColors.current
@@ -1208,7 +1225,6 @@ fun KineticCoverFrame(
     val bgScale = remember { Animatable(1f) }
     val bgAlpha = remember { Animatable(0f) }
     val cornerAssembly = remember { Animatable(0f) }
-    val cornerAlpha = remember { Animatable(1f) }
     val bgHoleProgress = remember { Animatable(0f) }
 
     /**
@@ -1237,7 +1253,7 @@ fun KineticCoverFrame(
      * 角标当前方位：0f = ┌ 左上 + ┘ 右下，1f = ┐ 右上 + └ 左下。
      *
      * 用 [Animatable] 存当前对角；换歌时在中心「口」字定格后 [snapDiagonalAndExpand] 直接 snap
-     * 到另一组对角（不再细线横移），随后展开并在展开过程中闪烁。
+     * 到另一组对角（不再细线横移），随后展开。
      */
     val diagAnim = remember { Animatable(if (transitionSeq % 2L != 0L) 1f else 0f) }
 
@@ -1253,13 +1269,14 @@ fun KineticCoverFrame(
     var lastHandledSeq by remember { mutableStateOf(transitionSeq) }
 
     /**
-     * 换歌后半段：对角**直接换位**（不滑动）→ 展开，且**展开过程中**持续闪烁。
+     * 换歌后半段：对角**直接换位**（不滑动）→ 角炸开归位 + 色块放大。
      *
      * 调用时角标已停在中心「口」字（`cornerAssembly == 1`），色块缩在框内。
      * 用户 2026-09-22：「切换封面的动画角移动位置改成缩成方块就变化」——
      * 不要再把角合拢成细线、横移到另一组对角；缩住之后**直接 snap** 对角。
-     * 随后角炸开 + 色块放大；闪烁不是定格时闪一下，而是**跟展开并行、贯穿整段**
-     * （用户：「不只闪一下 而且是展开的过程中闪」）。
+     *
+     * 这里原本还有一段「展开过程中持续闪烁」（角标与色块 alpha 明暗循环）。用户
+     * 2026-09-23 要求移除切封面动画的闪烁，展开阶段只保留几何运动。
      *
      * `cornerMorph` 全程保持 1f（完整 L 角），不做「合拢成细线」那一套。
      *
@@ -1271,32 +1288,9 @@ fun KineticCoverFrame(
         cornerMorph.snapTo(1f)
         diagAnim.snapTo(if (diagAnim.value < 0.5f) 1f else 0f)
 
-        // 2. 展开（220ms）与闪烁并行：闪烁贯穿整段 expand，不是展开前单独闪一下
+        // 2. 展开（220ms）：角标炸开归位与色块放大同起同落
         val expandMs = 220
         coroutineScope {
-            // 取色方块 / 角框 alpha 明暗循环，直到展开结束再复位到 1
-            launch {
-                val dimMs = 40
-                val brightMs = 40
-                val cycle = dimMs + brightMs
-                val cycles = (expandMs + cycle - 1) / cycle // ≈ 3 次，盖住 220ms
-                repeat(cycles) {
-                    coroutineScope {
-                        launch {
-                            cornerAlpha.animateTo(0.22f, tween(dimMs, easing = LinearEasing))
-                        }
-                        bgAlpha.animateTo(0.28f, tween(dimMs, easing = LinearEasing))
-                    }
-                    coroutineScope {
-                        launch {
-                            cornerAlpha.animateTo(1f, tween(brightMs, easing = LinearEasing))
-                        }
-                        bgAlpha.animateTo(1f, tween(brightMs, easing = LinearEasing))
-                    }
-                }
-                cornerAlpha.snapTo(1f)
-                bgAlpha.snapTo(1f)
-            }
             val target = growBlockTo
             if (target != null) {
                 launch {
@@ -1317,7 +1311,7 @@ fun KineticCoverFrame(
     //      「擦除方向与遮盖方向相反」在底栏根本没有对照物。
     // 现在底栏（手动 / 静默）与详情页跑的是**同一套完整顺序**：
     //   色块按方向滑入（遮盖）→ 缩小到中心 → 角标拼「口」字 → 定格 → 对角 snap
-    //   → 角标炸开 + 色块放大（展开过程中持续闪烁）→ 挖洞擦除露出新封面。实现见 [runFullTransition]。
+    //   → 角标炸开 + 色块放大 → 挖洞擦除露出新封面。实现见 [runFullTransition]。
 
     /**
      * 详情页「进场」用的后半段：`cornerAssembly` 已经是 1（角标停在中心「口」字，
@@ -1334,7 +1328,6 @@ fun KineticCoverFrame(
         bgScale.snapTo(shrinkScale()) // 起手 = 被角框住的小方块，不是 0（缩没了「口」里就空着）
         bgAlpha.snapTo(1f)
         cornerAssembly.snapTo(1f)
-        cornerAlpha.snapTo(1f)
         cornerMorph.snapTo(1f) // 形态必须复位：上一次换位被打断会留下「线」的形态
         bgHoleProgress.snapTo(0f)
 
@@ -1379,7 +1372,6 @@ fun KineticCoverFrame(
         bgScale.snapTo(1f)
         bgAlpha.snapTo(1f)
         cornerAssembly.snapTo(0f)
-        cornerAlpha.snapTo(1f)
         cornerMorph.snapTo(1f) // 形态必须复位：上一次换位被打断会留下「线」的形态
         bgHoleProgress.snapTo(0f)
 
@@ -1421,7 +1413,7 @@ fun KineticCoverFrame(
         delay(80) // 稍作顿挫留白
 
         // 4. 放大与挖洞阶段（后半段）：
-        // ① 对角直接 snap 换位（不滑动）→ 角炸开归位 + 色块放大，**展开过程中**持续闪烁
+        // ① 对角直接 snap 换位（不滑动）→ 角炸开归位 + 色块放大
         //    （见 [snapDiagonalAndExpand]）。
         snapDiagonalAndExpand(growBlockTo = 1.0f)
 
@@ -1570,22 +1562,21 @@ fun KineticCoverFrame(
 
         // 顶层：角标 / 拼合正方形「口」
         // 由 cornerAssembly 负责在边缘折角与中心正方形「口」之间连续插值
-        CornerAccents(
-            // 与取色方块共用同一个动画色：角标随新配色一起淡过来
-            color = accent,
-            scale = 1.0f,
-            offsetDp = 0f,
-            assemblyProgress = { cornerAssembly.value },
-            // 方位由 snapDiagonalAndExpand 在中心「口」定格后直接 snap 换组（无细线横移）。
-            diagonal = { diagAnim.value },
-            // 形态平时恒为 1f（完整 L 角）；换对角不再走细线 morph
-            morph = { cornerMorph.value },
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    alpha = cornerAlpha.value
-                },
-        )
+        // 底栏缩略图（32dp）不画角：`showCorners = false`，只留取色方块的滑动 / 缩放 / 挖洞
+        if (showCorners) {
+            CornerAccents(
+                // 与取色方块共用同一个动画色：角标随新配色一起淡过来
+                color = accent,
+                scale = 1.0f,
+                offsetDp = 0f,
+                assemblyProgress = { cornerAssembly.value },
+                // 方位由 snapDiagonalAndExpand 在中心「口」定格后直接 snap 换组（无细线横移）。
+                diagonal = { diagAnim.value },
+                // 形态平时恒为 1f（完整 L 角）；换对角不再走细线 morph
+                morph = { cornerMorph.value },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 
@@ -1767,8 +1758,10 @@ fun ProgressLine(
                     muted = true,
                 )
                 Spacer(Modifier.weight(1f))
+                // 右侧显示**剩余时间**（带负号），不是总时长 —— 用户 2026-09-23。
+                // 拖拽时用拖到的位置算，松手前就是「若在这里落针还剩多久」。
                 ScrambleTimeText(
-                    text = fmtTime(durationMs),
+                    text = "-" + fmtTime((durationMs - posShown).coerceAtLeast(0L)),
                     triggerKey = if (scrambleDurationLabel()) trackKey else null,
                     enabled = !dragging && scrambleDurationLabel(),
                     size = 12,
@@ -1839,15 +1832,6 @@ fun ProgressLine(
             }
         }
     }
-}
-
-@Composable
-fun LogoMark(modifier: Modifier = Modifier) {
-    Box(
-        modifier
-            .size(10.dp)
-            .background(Color.Red),
-    )
 }
 
 @Composable

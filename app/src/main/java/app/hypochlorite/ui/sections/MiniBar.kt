@@ -324,6 +324,7 @@ private fun MiniBarChrome(
                         transitionSeq = songTransitionSeq,
                         accentColor = banner,
                         isAudioReady = isAudioReady,
+                        showCorners = false,
                         modifier = Modifier
                             .size(32.dp)
                             .reportMiniCoverAnchor(),
