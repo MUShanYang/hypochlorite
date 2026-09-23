@@ -14,6 +14,13 @@ permissions:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
+    env:
+      # 都是可选的：仓库不设 secrets 也能构建，只是 debug 包用 AGP 自己生成的签名，
+      # 换 runner 后覆盖安装要先卸载。四个一起配，缺一个签名会失败。
+      HYPO_KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      HYPO_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      HYPO_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      HYPO_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,8 +33,18 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      - name: Restore signing keystore
+        if: ${{ env.HYPO_KEYSTORE_BASE64 != '' }}
+        run: |
+          printf '%s' "$HYPO_KEYSTORE_BASE64" | base64 --decode > nightly.p12
+          echo "HYPO_KEYSTORE_FILE=$GITHUB_WORKSPACE/nightly.p12" >> "$GITHUB_ENV"
+
       - name: Assemble debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Remove signing keystore
+        if: ${{ always() && env.HYPO_KEYSTORE_BASE64 != '' }}
+        run: rm -f nightly.p12
 
       - name: Prepare versioned APK and release notes
         id: apk

@@ -1,16 +1,15 @@
-import java.util.Properties
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-// Fixed Nightly keystore so CI debug APKs share one signature and can
-// upgrade without uninstall. Not a Play Store upload key.
-val nightlyProps = Properties().apply {
-    rootProject.file("keystore/nightly.properties").inputStream().use { load(it) }
-}
+// 签名密钥不进仓库。四个环境变量给全了才签：
+//   HYPO_KEYSTORE_FILE / HYPO_KEYSTORE_PASSWORD / HYPO_KEY_ALIAS / HYPO_KEY_PASSWORD
+// 没给就完全不配签名：debug 落回 AGP 自己生成的 debug keystore（换机器或换 CI runner 后签名
+// 不一致，覆盖安装要先卸载），release 出未签名包。
+// CI 用法见 .github/workflows/nightly.yml，本地见 README。
+val keystorePath = System.getenv("HYPO_KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
 
 android {
     namespace = "app.hypochlorite"
@@ -26,21 +25,23 @@ android {
     }
 
     signingConfigs {
-        create("nightly") {
-            storeFile = rootProject.file("keystore/${nightlyProps["storeFile"]}")
-            storePassword = nightlyProps["storePassword"] as String
-            keyAlias = nightlyProps["keyAlias"] as String
-            keyPassword = nightlyProps["keyPassword"] as String
+        keystorePath?.let { path ->
+            create("external") {
+                storeFile = rootProject.file(path)
+                storePassword = System.getenv("HYPO_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("HYPO_KEY_ALIAS")
+                keyPassword = System.getenv("HYPO_KEY_PASSWORD")
+            }
         }
     }
 
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("nightly")
+            if (keystorePath != null) signingConfig = signingConfigs.getByName("external")
         }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("nightly")
+            if (keystorePath != null) signingConfig = signingConfigs.getByName("external")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
