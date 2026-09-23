@@ -15,6 +15,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextInput
@@ -52,6 +53,27 @@ class MobilePerformanceSmokeTest {
             it.isAccessible = true
             it.get(vm) as MutableStateFlow<T>
         }
+
+    /** Regression: ART must verify the detail screen when it is first opened. */
+    @Test fun opensNowPlayingWithMinimalSong() {
+        lateinit var vm: HypochloriteViewModel
+        compose.runOnUiThread {
+            vm = ViewModelProvider(compose.activity)[HypochloriteViewModel::class.java]
+            val ui = flow<HomeState>(vm, "_ui")
+            val song = Song("detail-regression", "Detail regression", emptyList())
+            ui.value = ui.value.copy(
+                loading = false,
+                player = PlayerSnapshot(current = song, queue = listOf(song), index = 0),
+            )
+        }
+        repeat(3) {
+            compose.runOnUiThread { vm.openNowPlaying() }
+            compose.onNodeWithTag("now-playing").assertIsDisplayed()
+            compose.waitForIdle()
+            compose.runOnUiThread { vm.closeNowPlaying() }
+            compose.waitForIdle()
+        }
+    }
 
     @Test fun longListsTypingDetailsLyricsAndTrackTransitions() {
         lateinit var vm: HypochloriteViewModel

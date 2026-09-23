@@ -3,6 +3,7 @@ package app.hypochlorite.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -54,6 +55,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -265,7 +267,7 @@ internal fun NowPlayingScreen(state: NowPlayingUi, vm: HypochloriteViewModel) {
         displayedSong = nextSong
     }
 
-    Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize().testTag("now-playing")) {
         Box(
             Modifier
                 .fillMaxSize()
@@ -372,131 +374,16 @@ internal fun NowPlayingScreen(state: NowPlayingUi, vm: HypochloriteViewModel) {
             }
         }
         AudioWaveLine(playing = state.player.playing, audioLevel = vm::audioLevel)
-        Box(
-            Modifier
-                .weight(1f)
-                .fillMaxWidth(),
-        ) {
-            val showLyrics = showFullLyrics && hasLyrics
-            val lyricsProgress by animateFloatAsState(
-                targetValue = if (showLyrics) 1f else 0f,
-                animationSpec = tween(320, easing = CubicBezierEasing(0.1f, 0.9f, 0.2f, 1f)),
-                label = "lyricsCover",
-            )
-            // 封面一直留在组合里：在歌词页切歌时完整动画仍在跑，切回封面才不会只剩后半段。
-            // 不卸 KineticCoverFrame、不加 Offscreen：1126d7f 的互换/离屏合成在部分机型打开详情会崩。
-            // 歌词 LazyColumn 首帧 scrollToItem 很贵：晚一点再挂，且等淡入近结束才允许跟滚。
-            val mountFullLyrics = showLyrics || lyricsProgress > 0.25f
-            val lyricsScrollReady = lyricsProgress >= 0.95f
-            Column(
-                Modifier
-                    .align(Alignment.Center)
-                    .zIndex(if (lyricsProgress < 0.5f) 1f else 0f)
-                    .fillMaxWidth()
-                    .graphicsLayer {
-                        alpha = 1f - lyricsProgress
-                        val scale = 1f - 0.05f * lyricsProgress
-                        scaleX = scale
-                        scaleY = scale
-                        translationY = -12.dp.toPx() * lyricsProgress
-                    },
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(240.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            Modifier
-                                .weight(1f)
-                                .fillMaxHeight(),
-                            contentAlignment = Alignment.CenterEnd,
-                        ) {
-                            if (lyricsProgress < 0.85f) {
-                                NowPlayingSideLyric(
-                                    vm = vm,
-                                    lines = state.player.lyricLines,
-                                    left = true,
-                                    modifier = Modifier.padding(end = 12.dp),
-                                )
-                            }
-                        }
-                        val isAudioReady = (state.player.current?.id == song?.id) &&
-                            (state.player.playable != null || state.player.playing || state.player.error != null)
-                        KineticCoverFrame(
-                            coverUrl = song?.cover?.takeIf { it.isNotEmpty() } ?: state.backdropCoverUrl,
-                            songId = song?.id,
-                            direction = state.songTransitionDir,
-                            transitionSeq = state.songTransitionSeq,
-                            accentColor = state.palette.banner,
-                            playSecondHalfOnEnter = true,
-                            isAudioReady = isAudioReady,
-                            modifier = Modifier
-                                .size(200.dp)
-                                .then(
-                                    if (hasLyrics && lyricsProgress <= 0.02f) {
-                                        Modifier.clickableNoRipple { showFullLyrics = true }
-                                    } else {
-                                        Modifier
-                                    },
-                                )
-                                .coverPulse(coverPulseScale)
-                                .reportPrimaryCoverAnchor(),
-                        )
-                        Box(
-                            Modifier
-                                .weight(1f)
-                                .fillMaxHeight(),
-                            contentAlignment = Alignment.CenterStart,
-                        ) {
-                            if (lyricsProgress < 0.85f) {
-                                NowPlayingSideLyric(
-                                    vm = vm,
-                                    lines = state.player.lyricLines,
-                                    left = false,
-                                    modifier = Modifier.padding(start = 12.dp),
-                                )
-                            }
-                        }
-                    }
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            // 高度**定死**（原来是 `heightIn(min = 46.dp)`，会被长句顶破：
-                            // 字号按长度分 12/13/14sp、行数 1~3 行，一破，上面那颗封面就跟着
-                            // 这栏的重心整体挪一截）。现在一律按最长的一档占位，换句时纹丝不动。
-                            .padding(top = 20.dp)
-                            .height(lyricBlockHeight),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (lyricsProgress < 0.85f) {
-                            NowPlayingEnglishLyric(
-                                vm = vm,
-                                lines = state.player.lyricLines,
-                            )
-                        }
-                    }
-            }
-            if (mountFullLyrics) {
-                NowPlayingFullLyrics(
-                    vm = vm,
-                    lines = state.player.lyricLines,
-                    enableFollowScroll = lyricsScrollReady,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .zIndex(if (lyricsProgress >= 0.5f) 1f else 0f)
-                        .graphicsLayer {
-                            alpha = lyricsProgress
-                            translationY = 16.dp.toPx() * (1f - lyricsProgress)
-                            val scale = 0.96f + 0.04f * lyricsProgress
-                            scaleX = scale
-                            scaleY = scale
-                        },
-                )
-            }
-        }
+        NowPlayingArtwork(
+            state = state,
+            vm = vm,
+            showFullLyrics = showFullLyrics,
+            hasLyrics = hasLyrics,
+            lyricBlockHeight = lyricBlockHeight,
+            coverPulseScale = coverPulseScale,
+            onShowFullLyrics = { showFullLyrics = true },
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        )
         if (!state.player.error.isNullOrEmpty()) {
             MonoText(state.player.error!!, color = Warn, modifier = Modifier.padding(bottom = 8.dp))
         }
@@ -724,6 +611,143 @@ internal fun NowPlayingScreen(state: NowPlayingUi, vm: HypochloriteViewModel) {
             }
         }
             }
+        }
+    }
+}
+
+// Keep the artwork subtree out of the screen's generated Compose method.
+// The monolithic method produced invalid DEX register moves and failed ART verification.
+@Composable
+private fun NowPlayingArtwork(
+    state: NowPlayingUi,
+    vm: HypochloriteViewModel,
+    showFullLyrics: Boolean,
+    hasLyrics: Boolean,
+    lyricBlockHeight: Dp,
+    coverPulseScale: Animatable<Float, AnimationVector1D>,
+    onShowFullLyrics: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val song = state.player.current
+    Box(modifier) {
+        val showLyrics = showFullLyrics && hasLyrics
+        val lyricsProgress by animateFloatAsState(
+            targetValue = if (showLyrics) 1f else 0f,
+            animationSpec = tween(320, easing = CubicBezierEasing(0.1f, 0.9f, 0.2f, 1f)),
+            label = "lyricsCover",
+        )
+        // 封面一直留在组合里：在歌词页切歌时完整动画仍在跑，切回封面才不会只剩后半段。
+        // 不卸 KineticCoverFrame、不加 Offscreen：1126d7f 的互换/离屏合成在部分机型打开详情会崩。
+        // 歌词 LazyColumn 首帧 scrollToItem 很贵：晚一点再挂，且等淡入近结束才允许跟滚。
+        val mountFullLyrics = showLyrics || lyricsProgress > 0.25f
+        val lyricsScrollReady = lyricsProgress >= 0.95f
+        Column(
+            Modifier
+                .align(Alignment.Center)
+                .zIndex(if (lyricsProgress < 0.5f) 1f else 0f)
+                .fillMaxWidth()
+                .graphicsLayer {
+                    alpha = 1f - lyricsProgress
+                    val scale = 1f - 0.05f * lyricsProgress
+                    scaleX = scale
+                    scaleY = scale
+                    translationY = -12.dp.toPx() * lyricsProgress
+                },
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .height(240.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    if (lyricsProgress < 0.85f) {
+                        NowPlayingSideLyric(
+                            vm = vm,
+                            lines = state.player.lyricLines,
+                            left = true,
+                            modifier = Modifier.padding(end = 12.dp),
+                        )
+                    }
+                }
+                val isAudioReady = (state.player.current?.id == song?.id) &&
+                    (state.player.playable != null || state.player.playing || state.player.error != null)
+                KineticCoverFrame(
+                    coverUrl = song?.cover?.takeIf { it.isNotEmpty() } ?: state.backdropCoverUrl,
+                    songId = song?.id,
+                    direction = state.songTransitionDir,
+                    transitionSeq = state.songTransitionSeq,
+                    accentColor = state.palette.banner,
+                    playSecondHalfOnEnter = true,
+                    isAudioReady = isAudioReady,
+                    modifier = Modifier
+                        .size(200.dp)
+                        .then(
+                            if (hasLyrics && lyricsProgress <= 0.02f) {
+                                Modifier.clickableNoRipple { onShowFullLyrics() }
+                            } else {
+                                Modifier
+                            },
+                        )
+                        .coverPulse(coverPulseScale)
+                        .reportPrimaryCoverAnchor(),
+                )
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    if (lyricsProgress < 0.85f) {
+                        NowPlayingSideLyric(
+                            vm = vm,
+                            lines = state.player.lyricLines,
+                            left = false,
+                            modifier = Modifier.padding(start = 12.dp),
+                        )
+                    }
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    // 高度**定死**（原来是 `heightIn(min = 46.dp)`，会被长句顶破：
+                    // 字号按长度分 12/13/14sp、行数 1~3 行，一破，上面那颗封面就跟着
+                    // 这栏的重心整体挪一截）。现在一律按最长的一档占位，换句时纹丝不动。
+                    .padding(top = 20.dp)
+                    .height(lyricBlockHeight),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (lyricsProgress < 0.85f) {
+                    NowPlayingEnglishLyric(
+                        vm = vm,
+                        lines = state.player.lyricLines,
+                    )
+                }
+            }
+        }
+        if (mountFullLyrics) {
+            NowPlayingFullLyrics(
+                vm = vm,
+                lines = state.player.lyricLines,
+                enableFollowScroll = lyricsScrollReady,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(if (lyricsProgress >= 0.5f) 1f else 0f)
+                    .graphicsLayer {
+                        alpha = lyricsProgress
+                        translationY = 16.dp.toPx() * (1f - lyricsProgress)
+                        val scale = 0.96f + 0.04f * lyricsProgress
+                        scaleX = scale
+                        scaleY = scale
+                    },
+            )
         }
     }
 }
