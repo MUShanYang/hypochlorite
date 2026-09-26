@@ -201,8 +201,9 @@ private fun Header(
         Modifier
             .fillMaxWidth()
             .padding(
-                start = if (state.searchOpen) 8.dp else 14.dp,
-                end = if (state.searchOpen) 8.dp else 14.dp,
+                // 展开后收紧左右边距，让 ExpandingSearch 多吃一段顶栏宽度。
+                start = if (state.searchOpen) 4.dp else 10.dp,
+                end = if (state.searchOpen) 4.dp else 10.dp,
                 top = if (state.searchOpen) 10.dp else 16.dp,
                 bottom = if (state.searchOpen) 8.dp else 12.dp,
             ),
@@ -243,7 +244,8 @@ private fun Header(
                 .weight(1f)
                 .padding(
                     start = 0.dp,
-                    end = if (state.searchOpen) 2.dp else 6.dp,
+                    // 收紧 SEARCH 与右侧动作钮之间的空隙，让展开条更长。
+                    end = if (state.searchOpen) 0.dp else 4.dp,
                 ),
         )
         // 在房间里时这个图标常亮，点进去能看到房间和成员
@@ -253,12 +255,12 @@ private fun Header(
                 size = 17.dp,
             )
         }
-        Spacer(Modifier.width(6.dp))
+        Spacer(Modifier.width(4.dp))
         // 听歌识曲：识别是临时动作，不常驻高亮，用次级色，视觉重量排在设置之前、房间之后
         MiniIconButton(onClick = { vm.openAudioMatch() }) {
             RadarIcon(color = colors.text, size = 17.dp)
         }
-        Spacer(Modifier.width(6.dp))
+        Spacer(Modifier.width(4.dp))
         MiniIconButton(onClick = { vm.openConfig() }) {
             SettingsIcon(color = colors.muted, size = 16.dp)
         }

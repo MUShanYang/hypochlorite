@@ -8,6 +8,7 @@ import android.graphics.Rect
 import android.graphics.drawable.BitmapDrawable
 import android.os.Build
 import android.util.DisplayMetrics
+import android.widget.Toast
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -657,8 +658,9 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
     fun onAudioMatchHit() {
         val hit = _ui.value.audioMatch.hit ?: return
         playSong(hit)
-        // toast 由引擎发，collector 再收回 _ui —— 别在这里直接写 _ui.audioMatch，会被下一次 collect 覆盖
-        app.audioMatch.notify(hit.line())
+        // 命中只用系统 Toast 报「识别成功」—— 不走 ListenToast 宿主，也不塞歌名
+        // （歌名会立刻出现在详情页上）。其它识曲失败文案仍经 audioMatch.toast。
+        Toast.makeText(getApplication(), "识别成功", Toast.LENGTH_SHORT).show()
         viewModelScope.launch {
             withTimeoutOrNull(NOW_PLAYING_WAIT_MS) { app.player.state.first { it.current?.id == hit.id } }
             openNowPlaying()

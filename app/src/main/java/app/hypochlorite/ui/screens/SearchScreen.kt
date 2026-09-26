@@ -229,7 +229,7 @@ private fun SearchHeader(
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(start = 8.dp, end = 8.dp, top = 10.dp, bottom = 8.dp),
+            .padding(start = 4.dp, end = 4.dp, top = 10.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         MiniIconButton(onClick = onClose) {
@@ -248,7 +248,7 @@ private fun SearchHeader(
             lockOpen = true,
             modifier = Modifier
                 .weight(1f)
-                .padding(end = 2.dp),
+                .padding(end = 0.dp),
         )
         MiniIconButton(onClick = { vm.openListen() }) {
             TogetherIcon(

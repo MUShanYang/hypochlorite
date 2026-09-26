@@ -59,7 +59,7 @@ const val AUDIO_MATCH_ATTEMPTS = 3
  */
 data class AudioMatchState(
     val phase: AudioMatchPhase = AudioMatchPhase.Idle,
-    /** 命中曲目。接口其实会回多首，但界面只认第一首。 */
+    /** 命中曲目。接口可能回多首，matcher 侧已按官网优先排过序，这里取序列头。 */
     val hit: Song? = null,
     val toast: String? = null,
     val hitSeq: Long = 0,

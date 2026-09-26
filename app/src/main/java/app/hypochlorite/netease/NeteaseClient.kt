@@ -579,13 +579,62 @@ class NeteaseClient(
         val json = runCatching { JSONObject(text) }.getOrNull() ?: throw IOException("audio match: 响应不是 JSON")
         if (json.optInt("code", 200) != 200) throw IOException("audio match ${json.optInt("code")}")
         val arr = json.optJSONObject("data")?.optJSONArray("result") ?: return emptyList()
-        val out = mutableListOf<AudioMatchHit>()
+        val hits = mutableListOf<AudioMatchHit>()
+        val thinById = linkedMapOf<String, JSONObject>()
         for (i in 0 until arr.length()) {
             val item = arr.optJSONObject(i) ?: continue
             // 这里的 song 是精简形态（name/id/artists[]/album{}），normalizeSong
             // 认 artists 复数键，能直接吃；缺时长字段就当 0。
-            val song = normalizeSong(item.optJSONObject("song")) ?: continue
-            out.add(AudioMatchHit(song = song, startTimeMs = item.optLong("startTime", 0)))
+            val songObj = item.optJSONObject("song") ?: continue
+            val song = normalizeSong(songObj) ?: continue
+            hits.add(AudioMatchHit(song = song, startTimeMs = item.optLong("startTime", 0)))
+            thinById[song.id] = songObj
+        }
+        if (hits.isEmpty()) return emptyList()
+        // 识曲薄对象经常不带 privilege/pc；拉一次 detail 才能把云盘私传和官网轨分开。
+        // 失败就退回薄对象上的分数（仍可能靠专辑名等弱信号排序）。
+        val richById = runCatching { songDetailObjects(hits.map { it.song.id }) }.getOrDefault(emptyMap())
+        val byId = thinById.toMutableMap().apply { putAll(richById) }
+        return preferOfficialAudioMatchHits(hits, byId)
+    }
+
+    /**
+     * /api/v3/song/detail 的原始 songs[]，按 id 索引。给识曲排序用，
+     * 比 [getSongDetails] 多留 privilege / pc / copyrightId。
+     */
+    private fun songDetailObjects(ids: List<String>): Map<String, JSONObject> {
+        val idNums = ids.mapNotNull { it.toLongOrNull() }.distinct()
+        if (idNums.isEmpty()) return emptyMap()
+        val cArr = JSONArray()
+        val idsArr = JSONArray()
+        for (id in idNums) {
+            cArr.put(JSONObject().put("id", id).put("v", 0))
+            idsArr.put(id)
+        }
+        val res = ncm(
+            "/api/v3/song/detail",
+            JSONObject().put("c", cArr.toString()).put("ids", idsArr.toString()),
+            "weapi",
+        )
+        val arr = res.json?.optJSONArray("songs") ?: return emptyMap()
+        val privileges = res.json?.optJSONArray("privileges")
+        val privilegeById = linkedMapOf<String, JSONObject>()
+        if (privileges != null) {
+            for (i in 0 until privileges.length()) {
+                val p = privileges.optJSONObject(i) ?: continue
+                val pid = p.opt("id")?.toString() ?: continue
+                privilegeById[pid] = p
+            }
+        }
+        val out = linkedMapOf<String, JSONObject>()
+        for (i in 0 until arr.length()) {
+            val song = arr.optJSONObject(i) ?: continue
+            val id = song.opt("id")?.toString() ?: continue
+            // detail 的 privilege 在并列数组里，按 id 嵌回 song 方便统一打分。
+            if (song.optJSONObject("privilege") == null) {
+                privilegeById[id]?.let { song.put("privilege", it) }
+            }
+            out[id] = song
         }
         return out
     }

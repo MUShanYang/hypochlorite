@@ -1813,7 +1813,7 @@ fun RowLine(text: String, onClick: () -> Unit, trailing: String? = null, onTrail
 }
 
 private val SearchExpandEase = CubicBezierEasing(0.05f, 0.9f, 0.1f, 1f)
-private val SearchCollapsedWidth = 92.dp
+private val SearchCollapsedWidth = 108.dp
 private val SearchFrameHeight = 28.dp
 
 /**
@@ -2206,13 +2206,19 @@ fun RadarIcon(
         val w = this.size.width
         val h = this.size.height
         val sw = 1.5.dp.toPx()
-        // 发射点略偏左下，弧朝右上张开；整体包围盒对中到画布中心，避免在
-        // MiniIconButton 里看起来沉在一角。
-        val center = Offset(w * 0.40f, h * 0.60f)
-        drawCircle(color = c, radius = w * 0.075f, center = center)
-        // 两道弧从同一点向外扩，开口朝右上方（像声波散出）
+        // 弧开口朝右（-60°…+60°）：墨水集中在发射点右侧。若把发射点放在画布
+        // 几何中心，整块图形的包围盒会偏右，在 MiniIconButton 里看起来「沉」在
+        // 一侧。把发射点往左（并垂直居中）挪半个水平跨度，让包围盒中心落在
+        // (w/2, h/2)。stroke 半宽也算进跨度，避免外弧贴边被裁。
         val r1 = w * 0.26f
-        val r2 = w * 0.48f
+        val r2 = w * 0.46f
+        val dotR = w * 0.07f
+        val strokePad = sw * 0.5f
+        val center = Offset(
+            x = w * 0.5f - (r2 + strokePad - dotR) * 0.5f,
+            y = h * 0.5f,
+        )
+        drawCircle(color = c, radius = dotR, center = center)
         drawArc(
             color = c.copy(alpha = 0.85f),
             startAngle = -60f,
