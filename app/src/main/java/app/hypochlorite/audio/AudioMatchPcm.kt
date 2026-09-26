@@ -86,6 +86,19 @@ const val AUDIO_MATCH_SECONDS = 3
 const val AUDIO_MATCH_SAMPLE_RATE = 8000
 
 /**
+ * 一段归一化 PCM 的峰值 [0,1]。用来分辨「这三秒里到底有没有声音」：静音接近 0，
+ * 真歌实测 0.03（系统音频抓取量级偏小）到 0.8 不等。空数组给 0。
+ */
+fun peakOf(pcm: FloatArray): Float {
+    var peak = 0f
+    for (v in pcm) {
+        val a = if (v < 0f) -v else v
+        if (a > peak) peak = a
+    }
+    return peak.coerceIn(0f, 1f)
+}
+
+/**
  * 音频指纹提取器 —— [NeteaseClient.audioMatch] 的唯一上游。
  *
  * 输入是 [AUDIO_MATCH_SAMPLE_RATE] 单声道归一化 Float32（[downmixPcmToFloat] +

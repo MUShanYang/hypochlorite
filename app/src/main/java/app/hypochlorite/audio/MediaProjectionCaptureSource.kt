@@ -79,6 +79,10 @@ class MediaProjectionCaptureSource(
         } finally {
             controller.captureLevel = 0f
             runCatching { record.release() }
+            // 一个 MediaProjection 实例只能开一次采集会话（Android 14+ 复用直接 SecurityException，
+            // 官方文档原话「单次使用」「每次会话前都要重新征得同意」）。所以这轮抓完就把会话作废：
+            // ready 翻回 false，下次点按会重新弹授权框 —— 想省掉那次弹框就会换来「点一下就秒失败」。
+            controller.endCapture()
         }
     }
 

@@ -3,6 +3,7 @@ package app.hypochlorite.player
 import app.hypochlorite.audio.AudioCaptureSource
 import app.hypochlorite.audio.AudioFingerprintGenerator
 import app.hypochlorite.audio.AUDIO_MATCH_SECONDS
+import app.hypochlorite.audio.peakOf
 import app.hypochlorite.netease.AudioMatchHit
 import app.hypochlorite.netease.Song
 import kotlinx.coroutines.CancellationException
@@ -94,6 +95,7 @@ class AudioMatch(
                 _state.update { it.copy(phase = AudioMatchPhase.Capturing, hit = null, toast = null) }
                 val pcm = capture.capture(AUDIO_MATCH_SECONDS)
                 if (gen != generation) return@launch
+                val heard = peakOf(pcm) >= SilentPeak
 
                 _state.update { it.copy(phase = AudioMatchPhase.Fingerprinting) }
                 val fp = generator.generate(pcm)
@@ -102,21 +104,32 @@ class AudioMatch(
                 _state.update { it.copy(phase = AudioMatchPhase.Matching) }
                 val result = matcher(fp, AUDIO_MATCH_SECONDS)
                 if (gen != generation) return@launch
-                finish(gen, result)
+                finish(gen, result, heard)
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
                 if (gen == generation) {
-                    _state.update { it.copy(phase = AudioMatchPhase.Error, hit = null, toast = "识别失败，再试一次") }
+                    // 采集/指纹层抛的都是写给用户看的中文（"录音初始化失败…"），原样透出去比
+                    // 一句笼统的"识别失败"有用得多 —— 真机上排查全靠它。
+                    val why = e.message?.takeIf { it.isNotBlank() } ?: "识别失败，再试一次"
+                    _state.update { it.copy(phase = AudioMatchPhase.Error, hit = null, toast = why) }
                 }
             }
         }
     }
 
-    private fun finish(gen: Int, result: List<AudioMatchHit>) {
+    private fun finish(gen: Int, result: List<AudioMatchHit>, heard: Boolean) {
         if (gen != generation) return
         if (result.isEmpty()) {
-            _state.update { it.copy(phase = AudioMatchPhase.NoResult, hit = null, toast = "没听出来，靠近一点再试") }
+            // 无果有两种：听清了但库里没有，和三秒里压根没声音。后者在真机上最常见
+            // （对面 App 静音、没在播、被别的东西抢了焦点），文案分开才不至于让人白试。
+            _state.update {
+                it.copy(
+                    phase = AudioMatchPhase.NoResult,
+                    hit = null,
+                    toast = if (heard) "没听出来，换一段再试" else "没听到声音：确认对面 App 在放、音量没关",
+                )
+            }
             return
         }
         _state.update {
@@ -153,5 +166,10 @@ class AudioMatch(
     /** 一次性提示（授权被拒、没听出来等）。经 collector 收回 HomeState，UI 侧只读不写。 */
     fun notify(message: String) {
         if (message.isNotEmpty()) _state.update { it.copy(toast = message) }
+    }
+
+    private companion object {
+        /** 低于这个峰值就当"这三秒里没有声音"：真歌实测 0.03 上下，静音时是 0。 */
+        const val SilentPeak = 0.005f
     }
 }

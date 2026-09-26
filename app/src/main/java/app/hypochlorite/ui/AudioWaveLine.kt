@@ -28,8 +28,7 @@ import kotlin.random.Random
  * Decorative waves: PCM energy drives amplitude; the frame clock only moves the curves.
  *
  * [inkColor] defaults to white, which vanishes on a light-mode backdrop (luma 0.88 plus a
- * white scrim). Callers painting on anything but a dark field should pass their theme's ink —
- * [RingField] has taken ring/ball colors for the same reason.
+ * white scrim). Callers painting on anything but a dark field should pass their theme's ink.
  */
 @Composable
 fun AudioWaveLine(

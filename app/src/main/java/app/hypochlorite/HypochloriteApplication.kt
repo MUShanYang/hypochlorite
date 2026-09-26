@@ -73,6 +73,10 @@ class HypochloriteApplication : Application(), ImageLoaderFactory {
     var mediaSession: MediaSession? = null
         private set
 
+    /** 指纹层是不是真的在跑 wasm（false = 走假指纹兜底，识别必然「没听出来」，见 [AudioMatch]）。 */
+    var fingerprintIsReal: Boolean = false
+        private set
+
     private val scope =
         CoroutineScope(
             SupervisorJob() +
@@ -93,6 +97,8 @@ class HypochloriteApplication : Application(), ImageLoaderFactory {
         // 指纹层直接跑上游那段私有 wasm（资源有意不进仓库）。抓不到资源时退回假指纹：
         // 链路照样能跑，但打真接口必然「没听出来」，见 FakeAudioFingerprintGenerator 的注释。
         val fingerprintWasm = runCatching { assets.open(FingerprintAsset).use { it.readBytes() } }.getOrNull()
+        fingerprintIsReal = fingerprintWasm != null
+        if (fingerprintWasm == null) Log.w(TAG, "缺少 $FingerprintAsset：指纹退回假实现，识别只会「没听出来」")
         audioMatch = AudioMatch(
             scope = scope,
             // 采集源在构造期定死，运行时不再切（识别页已无「抓系统音频」开关）。低版本没有

@@ -127,6 +127,9 @@ private const val PROJECTION_GRANT_MS = 4_000L
 /** 按下暂停到真正开录之间的留白：让 ExoPlayer 管道里剩下的声音流完，别录进尾巴。 */
 private const val CAPTURE_SETTLE_MS = 200L
 
+/** 命中后等播放器挂上那首歌再弹详情页的上限；超时就别弹了（[openNowPlaying] 空队列不认）。 */
+private const val NOW_PLAYING_WAIT_MS = 2_000L
+
 /** 综合搜索一次拉一页，滑到底再要下一页。 */
 private const val SEARCH_PAGE = 20
 
@@ -341,6 +344,11 @@ data class HomeState(
     val audioMatch: AudioMatchState = AudioMatchState(),
     /** 系统音频投影是否已授权可用。低版本（无 AudioPlaybackCapture）恒 false。 */
     val audioCaptureReady: Boolean = false,
+    /**
+     * 指纹层是不是真在跑 wasm 提取器。false = 装机包里没有那份私有 wasm（或它读不出来），
+     * 此时走假指纹兜底：链路照样跑完，但只会「没听出来」而且快得多 —— 认不出歌时先看这一位。
+     */
+    val audioMatchFingerprintReal: Boolean = false,
     /** 底栏长按跳列表的目标行。null = 没有待处理的高亮。 */
     val pendingListJump: Int? = null,
     /** 同一行连续长按也要重新滚一次 —— 索引相同的话 State 去重会让 effect 不重跑。 */
@@ -420,6 +428,7 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
         // 先跑 restoreTheme 才不会把刚取到的配色又覆盖回纯黑。
         restoreTheme()
         _ui.update { it.copy(likedSongIds = app.session.getLikedSongIds()) }
+        _ui.update { it.copy(audioMatchFingerprintReal = app.fingerprintIsReal) }
         refresh()
         viewModelScope.launch {
             var wasPlaying = false
@@ -476,12 +485,19 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
         }
         // 听歌识曲：和一起听一样独立收集，状态变化只驱动识别页，不进播放/取色那条链
         viewModelScope.launch {
+            var seenHitSeq = app.audioMatch.state.value.hitSeq
             app.audioMatch.state.collect { am ->
                 // 采集窗口一关就收回自家播放：暂停只为「那 3 秒别录进自己的声音」而存在，
                 // 没理由让用户音乐在随后几秒算指纹 + 走网络期间继续哑着。
                 // cancel() 会把阶段打回 Idle，所以「中止」和「返回」也都走这一条。
                 if (pausedOwnForCapture && am.phase != AudioMatchPhase.Capturing) releaseCapturePause()
                 _ui.update { it.copy(audioMatch = am) }
+                // 命中就接管播放并弹详情页 —— 识别页不再自己演命中，结果直接落在详情页上。
+                // 只认比进来时更新的 seq：引擎挂在 Application 上，重进页面不该把上一次命中再演一遍。
+                if (am.hitSeq > seenHitSeq) {
+                    seenHitSeq = am.hitSeq
+                    onAudioMatchHit()
+                }
             }
         }
         // 系统音频投影就绪状态：识别页据此决定「点中心要不要先走一遍授权」
@@ -566,6 +582,8 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
     fun startAudioMatch() {
         if (app.audioMatch.running || awaitingProjection?.isActive == true) return
         awaitingProjection = viewModelScope.launch {
+            // 授权框是异步的：用户可能在等它回来的路上就退出了页面，那这条链路不该再跑
+            if (_ui.value.route != Route.AudioMatch) return@launch
             if (!app.systemAudio.ready.value) {
                 // 录屏框刚点完允许，投影是前台服务异步回交的（Android 14 要求用投影前先有
                 // mediaProjection 类型前台服务）。等一小会儿；真不来就别把人静默卡在原地。
@@ -599,9 +617,16 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
      */
     fun captureLevel(): Float = app.systemAudio.captureLevel
 
-    /** 用户在系统录屏授权框点了允许 → 交给控制器去起前台服务并创建投影。 */
+    /**
+     * 用户在系统录屏授权框点了允许 → 交给控制器去起前台服务并创建投影。
+     *
+     * 紧接着就把识别续上：授权是「一次会话一签」（见 [MediaProjectionCaptureSource]），
+     * 所以点一下 = 签一次 + 跑一次识别，不该再要用户点第二下。[startAudioMatch] 自己会等
+     * 投影回交（[PROJECTION_GRANT_MS] 内）。
+     */
     fun submitAudioProjectionResult(resultCode: Int, data: android.content.Intent) {
         app.systemAudio.beginCapture(resultCode, data)
+        startAudioMatch()
     }
 
     private fun pauseOwnForCapture() {
@@ -628,17 +653,22 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
     private fun releaseAudioProjection() = app.systemAudio.endCapture()
 
     /**
-     * 命中卡上按「播放这首」：接管播放，再飘一条 toast。
+     * 命中：接管播放，然后把详情页弹出来。
      *
-     * 引擎在 Hit 时不自己播（见 [app.hypochlorite.player.AudioMatchState]），识别页也不再
-     * 自动播 —— 命中只把答案摊开给用户看，听不听由他。自家播放早在采集窗口结束时回来了
-     * （见收集 audioMatch.state 的那段），所以这里就是一次普通的用户切歌。
+     * 引擎在 Hit 时不自己播（见 [app.hypochlorite.player.AudioMatchState]），是这里替用户按下
+     * 「播放这首」：抢音频焦点让守规矩的后台 App 自行停，再等播放器真的挂上这首才开覆盖层 ——
+     * [openNowPlaying] 在队列还空着时会直接返回。自家播放早在采集窗口结束时回来了
+     * （见收集 audioMatch.state 的那段），所以这一步就是一次普通的用户切歌。
      */
     fun onAudioMatchHit() {
         val hit = _ui.value.audioMatch.hit ?: return
         playSong(hit)
         // toast 由引擎发，collector 再收回 _ui —— 别在这里直接写 _ui.audioMatch，会被下一次 collect 覆盖
         app.audioMatch.notify("已接管播放")
+        viewModelScope.launch {
+            withTimeoutOrNull(NOW_PLAYING_WAIT_MS) { app.player.state.first { it.current?.id == hit.id } }
+            openNowPlaying()
+        }
     }
 
     fun setListenInput(s: String) = _ui.update { it.copy(listenInput = s) }
@@ -1551,6 +1581,8 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
                 // cancel() 之后收集器本会收到 Idle 顺手恢复播放，但 viewModelScope 若先拆完
                 // 就没有下一次收集了 —— 这里不等它，当场收回。有标志位，重复调无害。
                 releaseCapturePause()
+                // 授权框还开着就退出页面：别让"点了允许"在离开之后把识别续上
+                awaitingProjection?.cancel()
                 app.audioMatch.cancel()
                 releaseAudioProjection()
             }
