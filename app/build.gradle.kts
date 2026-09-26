@@ -93,6 +93,8 @@ dependencies {
     implementation("androidx.media:media:1.7.0")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // 听歌识曲的指纹：纯 JVM 的 wasm 解释器，跑上游那段网易的 C++→wasm 指纹生成器（零 native 代码）。
+    implementation("com.dylibso.chicory:runtime:1.7.5")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.google.zxing:core:3.5.3")
@@ -104,6 +106,8 @@ dependencies {
     testImplementation("org.json:json:20240303")
     // 识曲引擎是协程状态机，需要虚拟时钟测阶段流转与取消。
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    // 只在手动跑「真歌端到端探针」时用：JVM 侧解 MP3，喂给指纹层验证整条链路。
+    testImplementation("com.googlecode.soundlibs:jlayer:1.0.1.4")
     androidTestImplementation(composeBom)
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test:runner:1.6.2")

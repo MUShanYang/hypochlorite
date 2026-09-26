@@ -4,6 +4,8 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * 真·系统音频抓取：从 [SystemAudioController] 拿当前 MediaProjection，用 AudioPlaybackCapture
@@ -16,10 +18,13 @@ class MediaProjectionCaptureSource(
     private val controller: SystemAudioController,
 ) : AudioCaptureSource {
 
-    override suspend fun capture(durationSeconds: Int): FloatArray {
+    override suspend fun capture(durationSeconds: Int): FloatArray = withContext(Dispatchers.IO) {
         val projection = controller.projection
-            ?: throw IllegalStateException("系统音频未授权，先点开关授权录屏")
+            ?: throw IllegalStateException("系统音频未授权，点中间那个方块授权录屏")
 
+        // 只按 usage 匹配、**从不调用 removeMatchingUids** —— 也就是说我们自己的 ExoPlayer
+        // 同样在采集集合里。所以识别前必须先把自家播放暂停掉（见
+        // HypochloriteViewModel.pauseOwnForCapture），否则用户点一下识曲，指纹录的是自己。
         val config = AudioPlaybackCaptureConfiguration.Builder(projection)
             .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
             .addMatchingUsage(AudioAttributes.USAGE_GAME)
@@ -61,6 +66,7 @@ class MediaProjectionCaptureSource(
                     }
                     System.arraycopy(chunk, 0, pcm, filled, read)
                     filled += read
+                    controller.captureLevel = maxAbs(chunk, read)
                 }
             } finally {
                 runCatching { record.stop() }
@@ -68,11 +74,23 @@ class MediaProjectionCaptureSource(
 
             // 归一化。filled < need 时尾部留静音，够短就不喂进重采样。
             val floats = FloatArray(filled) { i -> pcm[i] / 32768f }
-            // 交给上层（引擎→假指纹→端点）前先重采样到 8k；这一步是纯函数，已在单测覆盖
-            return resampleLinear(floats, InputRateHz, AUDIO_MATCH_SAMPLE_RATE)
+            // 交给上层（引擎→wasm 指纹→端点）前先重采样到 8k；这一步是纯函数，已在单测覆盖
+            resampleLinear(floats, InputRateHz, AUDIO_MATCH_SAMPLE_RATE)
         } finally {
+            controller.captureLevel = 0f
             runCatching { record.release() }
         }
+    }
+
+    /** 前 [n] 个采样点的绝对值峰值，归一化到 [0,1]。 */
+    private fun maxAbs(samples: ShortArray, n: Int): Float {
+        var peak = 0
+        for (i in 0 until n) {
+            val v = samples[i].toInt()
+            val a = if (v < 0) -v else v
+            if (a > peak) peak = a
+        }
+        return (peak / 32768f).coerceIn(0f, 1f)
     }
 
     private companion object {

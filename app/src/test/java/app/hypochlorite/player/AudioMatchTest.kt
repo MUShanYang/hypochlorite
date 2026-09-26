@@ -63,7 +63,6 @@ class AudioMatchTest {
         assertEquals(AudioMatchPhase.Hit, st.phase)
         assertEquals("77", st.hit?.id)
         assertEquals(1, st.hitSeq)
-        assertNull(st.error)
     }
 
     @Test
@@ -88,16 +87,27 @@ class AudioMatchTest {
         assertEquals(AudioMatchPhase.NoResult, engine.state.value.phase)
         assertTrue(engine.state.value.toast != null)
         assertNull(engine.state.value.hit)
-        assertNull(engine.state.value.error)
     }
 
     @Test
-    fun `matcher throwing lands on Error with a message`() = runTest {
+    fun `matcher throwing lands on Error with a toast`() = runTest {
         val engine = AudioMatch(this, FakeCapture(), FakeGenerator(), matcher = { _, _ -> throw RuntimeException("boom") })
         engine.start()
         advanceUntilIdle()
         assertEquals(AudioMatchPhase.Error, engine.state.value.phase)
-        assertTrue(engine.state.value.error!!.isNotEmpty())
+        // 界面上识别中刻意不放任何文字，失败只有 toast 这一条出口
+        assertTrue(engine.state.value.toast!!.isNotEmpty())
+    }
+
+    @Test
+    fun `running marks exactly the three in-flight phases`() {
+        assertTrue(AudioMatchPhase.Capturing.running)
+        assertTrue(AudioMatchPhase.Fingerprinting.running)
+        assertTrue(AudioMatchPhase.Matching.running)
+        assertTrue(!AudioMatchPhase.Idle.running)
+        assertTrue(!AudioMatchPhase.Hit.running)
+        assertTrue(!AudioMatchPhase.NoResult.running)
+        assertTrue(!AudioMatchPhase.Error.running)
     }
 
     @Test

@@ -135,4 +135,21 @@ class RingFieldMathTest {
         assertEquals(0f, collapseAlpha(1f), 1e-6f)
         assertTrue(collapseAlpha(0.4f) > collapseAlpha(0.9f))
     }
+
+    /**
+     * 收拢三兄弟的**组合**契约 —— RingField 每帧就是照这个顺序喂的，页面在 JVM 上验不了，
+     * 所以在这里把它钉住：uv 走满时整片场必须收到各自的地面、且完全透明，
+     * 卡片才敢在环还挂着的时候铺上来。
+     */
+    @Test
+    fun `a fully gathered field lands on its floor at zero alpha`() {
+        for (i in 0 until RingSlots) {
+            val live = ringRadiusNorm(ringPhase(0.37f, i)).coerceAtLeast(0.05f)
+            val floor = live * CollapseFloorRatio
+            val uv = collapseSlotUv(1f, i)
+            assertEquals(1f, uv, 1e-6f)
+            assertEquals(floor, collapseRadius(live, uv, floor), 1e-6f)
+            assertEquals(0f, collapseAlpha(uv), 1e-6f)
+        }
+    }
 }

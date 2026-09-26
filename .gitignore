@@ -27,3 +27,6 @@ data/
 s.json
 t.json
 repos.json
+
+# 上游私有指纹 wasm（网易 C++→wasm），不进仓库：跑真机与单测时要手动放到这个路径。
+app/src/main/assets/netease/

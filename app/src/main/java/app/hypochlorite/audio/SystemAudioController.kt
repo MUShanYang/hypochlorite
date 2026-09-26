@@ -15,7 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * 2. 用投影前必须先起一个 mediaProjection 类型的前台服务——所以 [projection] 由
  *    [AudioCaptureService] 创建后回交，而不是这边直接 getMediaProjection。
  *
- * [ready] 翻 true 才代表投影可用、可以识别。UI 盯着它决定"抓系统音频"开关能否点亮。
+ * [ready] 翻 true 才代表投影可用、可以识别。识别页盯着它决定「点中心要不要先走授权」。
  */
 class SystemAudioController(private val appContext: Context) {
 
@@ -25,6 +25,18 @@ class SystemAudioController(private val appContext: Context) {
     @Volatile
     var projection: MediaProjection? = null
         private set
+
+    /**
+     * 采集期间的实时峰值 [0,1]，由 [MediaProjectionCaptureSource] 每读一块写一次，停下时归零。
+     *
+     * 为什么要单开一条电平：识别页的动画原本吃 `HypochloritePlayer.audioLevel()`，而它在自己
+     * 没在播放时恒返回 0 —— 识别期间我们自己正是暂停的（见 [MediaProjectionCaptureSource] 上
+     * 关于 removeMatchingUids 的注释），那条输入会在最需要动画的三秒里躺平。
+     *
+     * 走 @Volatile 而非 StateFlow：读方是 60fps 的绘制阶段 lambda，那里不该订阅、也不该重组。
+     */
+    @Volatile
+    var captureLevel: Float = 0f
 
     val supported: Boolean
         get() = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q
@@ -56,7 +68,7 @@ class SystemAudioController(private val appContext: Context) {
         _ready.value = false
     }
 
-    /** 结束抓取会话：停服务、stop 投影。离开识别页或关掉开关时调。 */
+    /** 结束抓取会话：停服务、stop 投影。只在离开识别页时调。 */
     fun endCapture() {
         runCatching { appContext.stopService(Intent(appContext, AudioCaptureService::class.java)) }
         projection?.let { mp -> runCatching { mp.stop() } }

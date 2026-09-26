@@ -20,7 +20,12 @@ const val RingBalls = 3
 /** Fraction of the total collapse during which the outer rings are still stationary. */
 const val CollapseStagger = 0.42f
 
-/** Where a collapsed ring stops: a fraction of the innermost live radius, not zero. */
+/**
+ * Where a collapsed ring stops: a fraction of its **own** live radius, not zero and not a
+ * shared absolute. Callers pass `floor = liveRadius * CollapseFloorRatio` per ring (see
+ * [collapseRadius]'s default of `0f`), which is what `RingFieldMathTest` pins down — it makes
+ * the whole field contract by the same ratio instead of sending outer rings on a longer errand.
+ */
 const val CollapseFloorRatio = 0.34f
 
 /** Radius growth inside one slot's life: sqrt means fast out, slow down — dense core, sparse rim. */

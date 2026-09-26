@@ -24,9 +24,20 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.random.Random
 
-/** Decorative waves: PCM energy drives amplitude; the frame clock only moves the curves. */
+/**
+ * Decorative waves: PCM energy drives amplitude; the frame clock only moves the curves.
+ *
+ * [inkColor] defaults to white, which vanishes on a light-mode backdrop (luma 0.88 plus a
+ * white scrim). Callers painting on anything but a dark field should pass their theme's ink —
+ * [RingField] has taken ring/ball colors for the same reason.
+ */
 @Composable
-fun AudioWaveLine(playing: Boolean, audioLevel: () -> Float, modifier: Modifier = Modifier) {
+fun AudioWaveLine(
+    playing: Boolean,
+    audioLevel: () -> Float,
+    modifier: Modifier = Modifier,
+    inkColor: Color = Color.White,
+) {
     val readLevel by rememberUpdatedState(audioLevel)
     var amplitude by remember { mutableFloatStateOf(0f) }
     var phase by remember { mutableFloatStateOf(0f) }
@@ -92,7 +103,7 @@ fun AudioWaveLine(playing: Boolean, audioLevel: () -> Float, modifier: Modifier 
         val center = size.height / 2f
         val start = 6.dp.toPx()
         val width = (size.width - start).coerceAtLeast(0f)
-        val ink = Color.White
+        val ink = inkColor
         val ampPx = (amplitude * (1f + accent * 0.22f)).coerceAtMost(1f) * size.height
         repeat(3) { layer ->
             path.reset()
@@ -127,7 +138,7 @@ fun AudioWaveLine(playing: Boolean, audioLevel: () -> Float, modifier: Modifier 
                     spark.liftDp.dp.toPx() * t * 0.25f) * amplitude
                 ).coerceIn(center - halfH, center + halfH)
             drawCircle(
-                Color.White.copy(alpha = 0.42f * fade),
+                ink.copy(alpha = 0.42f * fade),
                 ballR,
                 Offset(start + t * width, y),
             )

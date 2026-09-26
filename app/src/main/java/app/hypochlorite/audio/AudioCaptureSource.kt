@@ -39,10 +39,11 @@ class SineAudioCaptureSource : AudioCaptureSource {
 }
 
 /**
- * 假指纹生成器：返回定长 288 字节的 base64，格式对、内容无意义。
+ * 假指纹生成器：返回一段 288 字节的 base64，长度落在真指纹的量级上、内容无意义。
  *
- * 拿它打真接口必然 `NoResult`（见 memory：格式对但随机 → result=null, noMatchReason=10），
- * 这恰好覆盖了无果分支。命中分支靠引擎的 `forceHitForDebug` 走。
+ * 真指纹层（[NcmFingerprintWasm]）已经接管正常路径，这里只剩一个兜底：装机的 APK 里
+ * 没有私有的 `afp.query.wasm` 资源时用它，链路仍能跑完（拿它打真接口必然
+ * `code 200 + result=null`，见 memory，所以只会「没听出来」而不是崩）。
  * 和 [SineAudioCaptureSource] 一样，它 delay 一小段模拟真实提取的耗时，
  * 让 Fingerprinting 态在动效里可见。
  */
@@ -53,10 +54,10 @@ class FakeAudioFingerprintGenerator : AudioFingerprintGenerator {
     }
 
     private companion object {
-        /** 真实提取器单次约 30–75ms（Node 实测），取中间值让这一步看得见又不太拖。 */
+        /** 真提取器在 Chicory 上单次 2.3~3.4s（JVM 实测，Node 原生 wasm 是 30~75ms），兜底时不必真等那么久。 */
         const val FingerprintFakeMillis = 300L
 
-        /** 288 字节 → 384 base64 字符，与真指纹等长。内容是无意义的定值。 */
+        /** 288 字节 → 384 base64 字符。真指纹长度随内容变（实测 3 秒 738~786 字节），这定值只是同量级的占位。 */
         val FixedFingerprintBase64: String =
             ByteArray(288) { ((it * 37 + 11) % 251).toByte() }.let { bytes ->
                 android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)

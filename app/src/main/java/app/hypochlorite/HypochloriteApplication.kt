@@ -7,6 +7,7 @@ import android.os.Looper
 import android.util.Log
 import androidx.media3.session.MediaSession
 import app.hypochlorite.audio.FakeAudioFingerprintGenerator
+import app.hypochlorite.audio.NcmFingerprintWasm
 import app.hypochlorite.audio.SineAudioCaptureSource
 import app.hypochlorite.audio.SystemAudioController
 import app.hypochlorite.netease.NeteaseClient
@@ -36,6 +37,13 @@ private const val TAG = "hypochlorite"
 private const val PREFS_GUARD = "boot-guard"
 private const val KEY_BOOT = "boot_in_progress"
 private const val KEY_STRIKES = "boot_strikes"
+
+/**
+ * 识曲指纹用的 wasm（网易 C++ 编译产物）。它是有上游版权风险的私有二进制，**有意不进仓库**
+ * （见 .gitignore 的 `app/src/main/assets/netease/`），本地和真机都要手动放文件才生效；
+ * 缺它时指纹退回 [app.hypochlorite.audio.FakeAudioFingerprintGenerator]，链路照跑但必然「没听出来」。
+ */
+private const val FingerprintAsset = "netease/afp.query.wasm"
 
 /** 上一轮是否走了正常收尾（[markCleanExit]）。划掉后台时不会写，但那只代表「没走 onDestroy」，不代表崩溃 */
 private const val KEY_CLEAN = "boot_clean_exit"
@@ -82,15 +90,18 @@ class HypochloriteApplication : Application(), ImageLoaderFactory {
         player = HypochloritePlayer(this, client, scope, http, session)
         listen = ListenTogether(client, player, session, scope)
         systemAudio = SystemAudioController(this)
-        // 采集源和指纹生成器都是假的（UI 链路阶段）；正式实现换 SineAudioCaptureSource →
-        // 真 MediaProjection 源、FakeAudioFingerprintGenerator → Chicory 提取器，第 6 步。
+        // 指纹层直接跑上游那段私有 wasm（资源有意不进仓库）。抓不到资源时退回假指纹：
+        // 链路照样能跑，但打真接口必然「没听出来」，见 FakeAudioFingerprintGenerator 的注释。
+        val fingerprintWasm = runCatching { assets.open(FingerprintAsset).use { it.readBytes() } }.getOrNull()
         audioMatch = AudioMatch(
             scope = scope,
-            capture = SineAudioCaptureSource(),
-            generator = FakeAudioFingerprintGenerator(),
+            // 采集源在构造期定死，运行时不再切（识别页已无「抓系统音频」开关）。低版本没有
+            // AudioPlaybackCapture，只能留正弦源 —— 界面会直接拦住点按并提示，不会假装跑一遍。
+            capture = if (systemAudio.supported) systemAudio.newCaptureSource() else SineAudioCaptureSource(),
+            generator = fingerprintWasm?.let { NcmFingerprintWasm(it) } ?: FakeAudioFingerprintGenerator(),
             // 引擎不自己切线程；阻塞的网络调用在这里挪到 IO（scope 是 Main.immediate）
             matcher = { fp, seconds -> withContext(Dispatchers.IO) { client.audioMatch(fp, seconds) } },
-        ).apply { forceHitForDebug = BuildConfig.DEBUG }
+        )
 
         installBootGuard()
 

@@ -548,8 +548,9 @@ class NeteaseClient(
      *
      * [fingerprintBase64] 必须是**音频指纹**，不是 PCM：实测把 3 秒 8kHz 单声道
      * 的 s16le PCM 直接 base64 上去，服务端回 `code 400 请求解析失败`。指纹由
-     * 网易那套 C++ 提取器（Emscripten 编的 wasm）算出，见 [app.hypochlorite.audio.AudioFingerprint]。
-     * 长度与 [durationSeconds] 必须对得上 —— 3 秒定长输入产出 288 字节。
+     * 网易那套 C++ 提取器（Emscripten 编的 wasm）算出，见 [app.hypochlorite.audio.NcmFingerprintWasm]。
+     * 长度要和 [durationSeconds] 对得上，但**指纹长度随音频内容变**（实测 3 秒窗口：纯正弦 288 字节、
+     * 真歌 738~786 字节），所以别按定长断言。
      *
      * 结果分级：没匹配上是 `result: null` + `noMatchReason`（实测 10），属于成功调用
      * 返回空列表；只有解析失败（400）或网络不通才抛。

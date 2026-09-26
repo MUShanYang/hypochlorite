@@ -79,30 +79,17 @@ fun resampleLinear(input: FloatArray, fromRate: Int, toRate: Int): FloatArray {
     return out
 }
 
-/** 抓识曲输入用的定长窗口：网易 demo 的取值，指纹长度随它固定（3 秒 → 288 字节）。 */
+/** 抓识曲输入用的定长窗口：网易 demo 的取值。指纹长度会随音频内容变，采样率和秒数才是写死的。 */
 const val AUDIO_MATCH_SECONDS = 3
 
 /** 识曲指纹的采样率，和网易提取器写死的值一致。 */
 const val AUDIO_MATCH_SAMPLE_RATE = 8000
 
 /**
- * 一段归一化 PCM 的峰值 [0,1]。假指纹阶段识别必无果，用它把「到底有没有抓到声音」
- * 透到界面上，作为抓取链路唯一的可验证信号。空数组给 0。
- */
-fun peakOf(pcm: FloatArray): Float {
-    var peak = 0f
-    for (v in pcm) {
-        val a = if (v < 0f) -v else v
-        if (a > peak) peak = a
-    }
-    return peak.coerceIn(0f, 1f)
-}
-
-/**
  * 音频指纹提取器 —— [NeteaseClient.audioMatch] 的唯一上游。
  *
  * 输入是 [AUDIO_MATCH_SAMPLE_RATE] 单声道归一化 Float32（[downmixPcmToFloat] +
- * [resampleLinear] 的产物），输出是 base64 字符串；3 秒窗口定长产出 288 字节。
+ * [resampleLinear] 的产物），输出是 base64 字符串；实测 3 秒窗口纯正弦出 288 字节、真歌出 738~786 字节。
  * 算法在网易那份 Emscripten wasm 里，**实现只此一家**，接口留在这里是为了让
  * 抓取链路和 UI 不绑死在具体的 wasm 宿主方案上。
  */
