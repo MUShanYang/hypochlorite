@@ -538,6 +538,57 @@ class NeteaseClient(
         return parseLrc(raw)
     }
 
+    // ------------------------------------------------------------------ 听歌识曲
+
+    /**
+     * 听歌识曲 —— 参考项目 `module/audio_match.js`，uri 与查询参数形状逐字对齐。
+     *
+     * **匿名端点**：不加密通道、不带登录态，直连 interface 域名，所以这一支不走
+     * [ncm]（那三层通道都会把参数塞进表单体，这里要的是 query string）。
+     *
+     * [fingerprintBase64] 必须是**音频指纹**，不是 PCM：实测把 3 秒 8kHz 单声道
+     * 的 s16le PCM 直接 base64 上去，服务端回 `code 400 请求解析失败`。指纹由
+     * 网易那套 C++ 提取器（Emscripten 编的 wasm）算出，见 [app.hypochlorite.audio.AudioFingerprint]。
+     * 长度与 [durationSeconds] 必须对得上 —— 3 秒定长输入产出 288 字节。
+     *
+     * 结果分级：没匹配上是 `result: null` + `noMatchReason`（实测 10），属于成功调用
+     * 返回空列表；只有解析失败（400）或网络不通才抛。
+     */
+    fun audioMatch(fingerprintBase64: String, durationSeconds: Int): List<AudioMatchHit> {
+        val url = Ncm.API_DOMAIN + "/api/music/audio/match?" + arrayOf(
+            "sessionId" to Ncm.newSessionId(),
+            "algorithmCode" to "shazam_v2",
+            "duration" to durationSeconds.toString(),
+            "rawdata" to fingerprintBase64,
+            "times" to "1",
+            "decrypt" to "1",
+        ).joinToString("&") { (k, v) ->
+            "$k=${java.net.URLEncoder.encode(v, "UTF-8")}"
+        }
+        val request = okhttp3.Request.Builder()
+            .url(url)
+            .header("User-Agent", Ncm.UA_API)
+            .get()
+            .build()
+        val text = try {
+            http.newCall(request).execute().use { it.body?.string().orEmpty() }
+        } catch (_: Exception) {
+            throw IOException("audio match unreachable")
+        }
+        val json = runCatching { JSONObject(text) }.getOrNull() ?: throw IOException("audio match: 响应不是 JSON")
+        if (json.optInt("code", 200) != 200) throw IOException("audio match ${json.optInt("code")}")
+        val arr = json.optJSONObject("data")?.optJSONArray("result") ?: return emptyList()
+        val out = mutableListOf<AudioMatchHit>()
+        for (i in 0 until arr.length()) {
+            val item = arr.optJSONObject(i) ?: continue
+            // 这里的 song 是精简形态（name/id/artists[]/album{}），normalizeSong
+            // 认 artists 复数键，能直接吃；缺时长字段就当 0。
+            val song = normalizeSong(item.optJSONObject("song")) ?: continue
+            out.add(AudioMatchHit(song = song, startTimeMs = item.optLong("startTime", 0)))
+        }
+        return out
+    }
+
     // ------------------------------------------------------------------ 推荐 / FM
 
     fun dailySongs(): List<Song> {

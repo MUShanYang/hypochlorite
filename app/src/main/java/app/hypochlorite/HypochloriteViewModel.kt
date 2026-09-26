@@ -25,6 +25,8 @@ import app.hypochlorite.netease.Playlist
 import app.hypochlorite.netease.SearchPage
 import app.hypochlorite.netease.Song
 import app.hypochlorite.netease.parseListenInvite
+import app.hypochlorite.player.AudioMatchPhase
+import app.hypochlorite.player.AudioMatchState
 import app.hypochlorite.player.ListenTogetherState
 import app.hypochlorite.player.PlaybackService
 import app.hypochlorite.player.PlayerClock
@@ -209,6 +211,7 @@ sealed class Route {
     data object Login : Route()
     data object Config : Route()
     data object ListenTogether : Route()
+    data object AudioMatch : Route()
 }
 
 /**
@@ -326,6 +329,8 @@ data class HomeState(
     val backdropCoverUrl: String? = null,
     val listen: ListenTogetherState = ListenTogetherState(),
     val listenInput: String = "",
+    /** 听歌识曲引擎状态。见 [app.hypochlorite.player.AudioMatch]。 */
+    val audioMatch: AudioMatchState = AudioMatchState(),
     /** 底栏长按跳列表的目标行。null = 没有待处理的高亮。 */
     val pendingListJump: Int? = null,
     /** 同一行连续长按也要重新滚一次 —— 索引相同的话 State 去重会让 effect 不重跑。 */
@@ -459,6 +464,12 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
                 _ui.update { it.copy(listen = lt) }
             }
         }
+        // 听歌识曲：和一起听一样独立收集，状态变化只驱动识别页，不进播放/取色那条链
+        viewModelScope.launch {
+            app.audioMatch.state.collect { am ->
+                _ui.update { it.copy(audioMatch = am) }
+            }
+        }
         // 续房放在最后：它会改播放器队列，要等 restoreAndResume 把本地队列铺好之后，
         // 否则会被本地恢复的队列盖掉。
         viewModelScope.launch {
@@ -511,9 +522,33 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
 
     fun openListen() = push(Route.ListenTogether)
 
+    // ---------------------------------------------------------------- 听歌识曲
+
+    fun openAudioMatch() = push(Route.AudioMatch)
+
+    /** 进识别页时若停在上次结果上，收回空闲，避免一进页面就显示旧命中。 */
+    fun enterAudioMatch() {
+        if (_ui.value.audioMatch.phase != AudioMatchPhase.Idle) app.audioMatch.resetToIdle()
+    }
+
+    fun startAudioMatch() = app.audioMatch.start()
+
+    fun cancelAudioMatch() = app.audioMatch.cancel()
+
+    fun clearAudioMatchToast() = app.audioMatch.clearToast()
+
+    /**
+     * 命中后的交接：先播这首（抢音频焦点，守规矩的后台 App 会自行暂停），
+     * 再把 toast 换成歌名。页面交接（上浮 / 详情页）在识别页里按 [hitSeq] 演。
+     */
+    fun onAudioMatchHit() {
+        val hit = _ui.value.audioMatch.hit ?: return
+        playSong(hit)
+        // toast 由引擎发，collector 再收回 _ui —— 别在这里直接写 _ui.audioMatch，会被下一次 collect 覆盖
+        app.audioMatch.notify(hit.line().ifEmpty { "已接管播放" })
+    }
 
     fun setListenInput(s: String) = _ui.update { it.copy(listenInput = s) }
-
     fun listenCreateRoom(kind: ListenRoomKind = ListenRoomKind.Duo) = app.listen.createRoom(kind)
 
     fun listenJoinRoom(id: String = _ui.value.listenInput) {
@@ -1417,6 +1452,9 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
             // 离开房间页不等于退出房间 —— 用户可以边听边在别的页面逛，
             // 退出房间是显式动作（leaveRoom）。这里只是退出这个页面。
             Route.ListenTogether -> {}
+            // 识别是"点了才录 3 秒"的一次性动作，离开页面就该把在跑的采集掐掉，
+            // 免得回头进来看还挂着半截链路。
+            Route.AudioMatch -> app.audioMatch.cancel()
             Route.Home -> return
             else -> {}
         }

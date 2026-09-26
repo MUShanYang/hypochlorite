@@ -6,8 +6,11 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import androidx.media3.session.MediaSession
+import app.hypochlorite.audio.FakeAudioFingerprintGenerator
+import app.hypochlorite.audio.SineAudioCaptureSource
 import app.hypochlorite.netease.NeteaseClient
 import app.hypochlorite.netease.SessionStore
+import app.hypochlorite.player.AudioMatch
 import app.hypochlorite.player.ListenTogether
 import app.hypochlorite.player.MEDIA_CACHE_DIR
 import app.hypochlorite.player.HypochloritePlayer
@@ -26,6 +29,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val TAG = "hypochlorite"
 private const val PREFS_GUARD = "boot-guard"
@@ -53,6 +57,8 @@ class HypochloriteApplication : Application(), ImageLoaderFactory {
         private set
     lateinit var listen: ListenTogether
         private set
+    lateinit var audioMatch: AudioMatch
+        private set
     var mediaSession: MediaSession? = null
         private set
 
@@ -72,6 +78,15 @@ class HypochloriteApplication : Application(), ImageLoaderFactory {
         client = NeteaseClient(session, http)
         player = HypochloritePlayer(this, client, scope, http, session)
         listen = ListenTogether(client, player, session, scope)
+        // 采集源和指纹生成器都是假的（UI 链路阶段）；正式实现换 SineAudioCaptureSource →
+        // 真 MediaProjection 源、FakeAudioFingerprintGenerator → Chicory 提取器，第 6 步。
+        audioMatch = AudioMatch(
+            scope = scope,
+            capture = SineAudioCaptureSource(),
+            generator = FakeAudioFingerprintGenerator(),
+            // 引擎不自己切线程；阻塞的网络调用在这里挪到 IO（scope 是 Main.immediate）
+            matcher = { fp, seconds -> withContext(Dispatchers.IO) { client.audioMatch(fp, seconds) } },
+        ).apply { forceHitForDebug = BuildConfig.DEBUG }
 
         installBootGuard()
 

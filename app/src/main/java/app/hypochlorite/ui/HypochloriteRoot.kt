@@ -26,6 +26,7 @@ import app.hypochlorite.Route
 import app.hypochlorite.ThemeReveal
 import app.hypochlorite.ui.screens.AlbumScreen
 import app.hypochlorite.ui.screens.ArtistScreen
+import app.hypochlorite.ui.screens.AudioMatchScreen
 import app.hypochlorite.ui.screens.ConfigScreen
 import app.hypochlorite.ui.screens.HomeScreen
 import app.hypochlorite.ui.screens.ListenTogetherScreen
@@ -132,6 +133,7 @@ private fun RoutePage(route: Route, uiState: State<HomeState>, vm: HypochloriteV
         Route.Login -> LoginScreen(state, vm)
         Route.Config -> ConfigScreen(state, vm)
         Route.ListenTogether -> ListenTogetherScreen(state, vm)
+        Route.AudioMatch -> AudioMatchScreen(state, vm)
         Route.NowPlaying, Route.Roam -> Unit
     }
 }
@@ -179,6 +181,14 @@ private fun RoamHost(uiState: State<HomeState>, vm: HypochloriteViewModel) {
 
 @Composable
 private fun ToastHost(uiState: State<HomeState>, vm: HypochloriteViewModel) {
-    val toast by remember(uiState) { derivedStateOf { uiState.value.listen.toast } }
-    ListenToast(toast, vm::clearListenToast)
+    val toast by remember(uiState) {
+        derivedStateOf { uiState.value.listen.toast ?: uiState.value.audioMatch.toast }
+    }
+    // 一起听与识曲的 toast 不会同时出现（不同页面、不同动作），共用一条浮层，
+    // 谁非空就归谁清。
+    if (uiState.value.audioMatch.toast != null && uiState.value.listen.toast == null) {
+        ListenToast(toast, vm::clearAudioMatchToast)
+    } else {
+        ListenToast(toast, vm::clearListenToast)
+    }
 }

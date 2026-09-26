@@ -52,6 +52,7 @@ import app.hypochlorite.ui.HoverBold
 import app.hypochlorite.ui.MiniIconButton
 import app.hypochlorite.ui.MonoText
 import app.hypochlorite.ui.PlaylistRow
+import app.hypochlorite.ui.RadarIcon
 import app.hypochlorite.ui.SettingsIcon
 import app.hypochlorite.ui.SongRow
 import app.hypochlorite.ui.TogetherIcon
@@ -270,6 +271,11 @@ private fun Header(
                 color = if (state.connected) colors.accent else colors.text,
                 size = 17.dp,
             )
+        }
+        Spacer(Modifier.width(6.dp))
+        // 听歌识曲：识别是临时动作，不常驻高亮，用次级色，视觉重量排在设置之前、房间之后
+        MiniIconButton(onClick = { vm.openAudioMatch() }) {
+            RadarIcon(color = colors.text, size = 17.dp)
         }
         Spacer(Modifier.width(6.dp))
         MiniIconButton(onClick = { vm.openConfig() }) {

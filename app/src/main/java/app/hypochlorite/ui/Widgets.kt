@@ -2187,6 +2187,45 @@ fun TogetherIcon(
     }
 }
 
+/** 听歌识曲入口图标：中心一点 + 两道向外扩的弧，和识别页的同心环同源。 */
+@Composable
+fun RadarIcon(
+    color: Color = Color.Unspecified,
+    size: Dp = 14.dp,
+    modifier: Modifier = Modifier,
+) {
+    val colors = LocalHypochloriteColors.current
+    val c = if (color != Color.Unspecified) color else colors.text
+    Canvas(modifier = modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val sw = 1.5.dp.toPx()
+        val center = Offset(w * 0.28f, h * 0.72f)
+        drawCircle(color = c, radius = w * 0.08f, center = center)
+        // 两道弧从同一点向外扩，开口朝右上方（像声波散出）
+        val r1 = w * 0.30f
+        val r2 = w * 0.58f
+        drawArc(
+            color = c.copy(alpha = 0.85f),
+            startAngle = -60f,
+            sweepAngle = 120f,
+            useCenter = false,
+            topLeft = Offset(center.x - r1, center.y - r1),
+            size = Size(r1 * 2f, r1 * 2f),
+            style = Stroke(sw, cap = StrokeCap.Round),
+        )
+        drawArc(
+            color = c.copy(alpha = 0.45f),
+            startAngle = -60f,
+            sweepAngle = 120f,
+            useCenter = false,
+            topLeft = Offset(center.x - r2, center.y - r2),
+            size = Size(r2 * 2f, r2 * 2f),
+            style = Stroke(sw, cap = StrokeCap.Round),
+        )
+    }
+}
+
 @Composable
 fun PlayModeIcon(
     mode: PlayMode,

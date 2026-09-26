@@ -45,12 +45,12 @@ object Ncm {
 
     /** 主站域名。登录类端点的明文兜底必须打这里（interface 域名不行，直连时代实测）。 */
     const val DOMAIN = "https://music.163.com"
-    private const val API_DOMAIN = "https://interface.music.163.com"
+    internal const val API_DOMAIN = "https://interface.music.163.com"
     private const val EAPI_DOMAIN = "https://interfacepc.music.163.com"
 
     private const val UA_WEAPI =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0"
-    private const val UA_API =
+    internal const val UA_API =
         "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Safari/537.36 Chrome/91.0.4472.164 NeteaseMusicDesktop/3.1.29.205117"
     private const val UA_EAPI =
         "NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)"
@@ -256,6 +256,9 @@ object Ncm {
             repeat(length) { append(pool[kotlin.random.Random.nextInt(pool.length)]) }
         }
     }
+
+    /** 网易侧不参与鉴权、但格式要对的会话 id（听歌识曲一类的匿名端点用）。 */
+    internal fun newSessionId(): String = randomHex(32)
 
     // ------------------------------------------------------------ eapi header（request.js eapi/api 分支移植）
 

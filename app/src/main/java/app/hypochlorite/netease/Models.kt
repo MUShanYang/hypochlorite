@@ -91,6 +91,18 @@ data class LyricLine(
     val text: String,
 )
 
+/**
+ * 听歌识曲的一条命中。
+ *
+ * [startTimeMs] 是这首歌在原音频里开始出现的时间点，识曲结果可能有多条、
+ * 对应不同起始点，所以不并进 [Song]。
+ */
+@Immutable
+data class AudioMatchHit(
+    val song: Song,
+    val startTimeMs: Long,
+)
+
 /** 一起听房间里的一个成员 */
 @Immutable
 data class RoomUser(

@@ -60,6 +60,9 @@ android {
 
     buildFeatures {
         compose = true
+        // 识曲引擎的 forceHitForDebug 需要一个编译期 debug 信号（假指纹打真接口必无果，
+        // debug 包里用固定歌曲走完整命中/交接链路）。AGP 8 默认不生成 BuildConfig。
+        buildConfig = true
     }
 
     packaging {
@@ -99,6 +102,8 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // android.jar 里的 org.json 是桩，单元测试要换成真实现。
     testImplementation("org.json:json:20240303")
+    // 识曲引擎是协程状态机，需要虚拟时钟测阶段流转与取消。
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     androidTestImplementation(composeBom)
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test:runner:1.6.2")
