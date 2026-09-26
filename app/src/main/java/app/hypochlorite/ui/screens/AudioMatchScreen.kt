@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.sp
 import app.hypochlorite.HomeState
 import app.hypochlorite.HypochloriteViewModel
 import app.hypochlorite.audio.AUDIO_MATCH_SECONDS
+import app.hypochlorite.player.AUDIO_MATCH_ATTEMPTS
 import app.hypochlorite.player.AudioMatchPhase
 import app.hypochlorite.player.running
 import app.hypochlorite.ui.BackArrowIcon
@@ -58,8 +59,8 @@ private val House = CubicBezierEasing(0.1f, 0.9f, 0.2f, 1f)
  * 听歌识曲页 —— 真链路：抓系统音频 → wasm 算指纹 → 打网易比对接口。
  *
  * 页面上只有两样东西：一行签名式标题、一个可点的方块。没有环、没有波形、没有命中卡 ——
- * 识别中唯一的反馈是方块下面那行小字（阶段 + 中止提示），命中则由 [HypochloriteViewModel]
- * 直接接管播放并弹出详情页，这一页根本不参与结果展示。
+ * 识别中的反馈就是方块下面那两行小字（当前阶段 + 第几段 + 中止提示），命中则由
+ * [HypochloriteViewModel] 直接接管播放并弹出详情页，这一页根本不参与结果展示。
  *
  * 中间那个方块就是全部操作：没授权就当场把授权要齐（麦克风 → 录屏），要齐了先停掉自家播放
  * 再开链（自家输出也在采集集合里，不停下来录的就是自己）；跑起来了再点一下就中止。
@@ -156,7 +157,11 @@ internal fun AudioMatchScreen(state: HomeState, vm: HypochloriteViewModel) {
                     size = 13,
                 )
                 MonoText(
-                    if (running) "// 再点一下中止" else "// 抓 $AUDIO_MATCH_SECONDS 秒系统声音 · 比对曲库",
+                    if (running) {
+                        "// 第 ${am.attempt}/$AUDIO_MATCH_ATTEMPTS 段 · 再点一下中止"
+                    } else {
+                        "// 每段抓 $AUDIO_MATCH_SECONDS 秒系统声音 · 最多听 $AUDIO_MATCH_ATTEMPTS 段"
+                    },
                     color = colors.muted.copy(alpha = 0.8f),
                     size = 11,
                     modifier = Modifier.padding(top = 4.dp),

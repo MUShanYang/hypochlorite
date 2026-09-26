@@ -7,9 +7,6 @@ import kotlin.math.sin
 /**
  * 识曲的音频来源。返回 [AUDIO_MATCH_SAMPLE_RATE] 单声道、归一化到 [-1, 1] 的
  * Float32 PCM，长度 [AUDIO_MATCH_SECONDS] * 采样率。
- *
- * 真实现（MediaProjection 抓系统音频 + [downmixPcmToFloat]/[resampleLinear]）
- * 是第 6 步的事；本阶段用 [SineAudioCaptureSource] 把上层链路跑通。
  */
 fun interface AudioCaptureSource {
     /**
@@ -17,6 +14,20 @@ fun interface AudioCaptureSource {
      * （录音本就要这么久），好让 Capturing 态的动效有对应时长可看。
      */
     suspend fun capture(durationSeconds: Int): FloatArray
+
+    /**
+     * 连续采集，每 [chunkSeconds] 秒交一段给 [onChunk]，最多 [maxChunks] 段；
+     * [onChunk] 返回 false 就立刻停下（识别命中时用它省掉后面的采集）。
+     *
+     * 默认实现就是反复调 [capture] —— 对不需要连续性的源（正弦）够用。
+     * **真投影源必须重写**：一个 MediaProjection 只能开一次采集会话，逐段重开会直接
+     * SecurityException（见 [MediaProjectionCaptureSource]）。
+     */
+    suspend fun stream(chunkSeconds: Int, maxChunks: Int, onChunk: suspend (FloatArray) -> Boolean) {
+        repeat(maxChunks) {
+            if (!onChunk(capture(chunkSeconds))) return
+        }
+    }
 }
 
 /**

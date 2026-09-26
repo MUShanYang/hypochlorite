@@ -26,18 +26,6 @@ class SystemAudioController(private val appContext: Context) {
     var projection: MediaProjection? = null
         private set
 
-    /**
-     * 采集期间的实时峰值 [0,1]，由 [MediaProjectionCaptureSource] 每读一块写一次，停下时归零。
-     *
-     * 为什么要单开一条电平：识别页的动画原本吃 `HypochloritePlayer.audioLevel()`，而它在自己
-     * 没在播放时恒返回 0 —— 识别期间我们自己正是暂停的（见 [MediaProjectionCaptureSource] 上
-     * 关于 removeMatchingUids 的注释），那条输入会在最需要动画的三秒里躺平。
-     *
-     * 走 @Volatile 而非 StateFlow：读方是 60fps 的绘制阶段 lambda，那里不该订阅、也不该重组。
-     */
-    @Volatile
-    var captureLevel: Float = 0f
-
     val supported: Boolean
         get() = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q
 

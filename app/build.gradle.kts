@@ -1,3 +1,6 @@
+import java.net.URI
+import java.util.Base64
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -60,9 +63,6 @@ android {
 
     buildFeatures {
         compose = true
-        // 识曲引擎的 forceHitForDebug 需要一个编译期 debug 信号（假指纹打真接口必无果，
-        // debug 包里用固定歌曲走完整命中/交接链路）。AGP 8 默认不生成 BuildConfig。
-        buildConfig = true
     }
 
     packaging {
@@ -71,6 +71,50 @@ android {
         }
     }
 }
+
+// 识曲指纹是上游（网易）编出来的私有 wasm，**不进仓库**（见 .gitignore）。构建时从上游公开地址取一次，
+// 写进 assets —— 上游把它以 base64 内嵌在 afp.wasm.js 里，解出来就是原始 wasm。
+//
+// 取不到只警告、不让构建失败：App 会优雅降级成假指纹（识别必然「没听出来」，识别页上有明显提示），
+// 本地断网也照常能编。CI 那边由 workflow 里的一步断言文件存在，保证发出去的包不是半残。
+val fingerprintWasm = layout.projectDirectory.file("src/main/assets/netease/afp.query.wasm")
+
+// 同一份文件的两个来源：GitHub raw 为主，jsDelivr 兜底（国内网络常只通其中一个）。
+val fingerprintWasmSources = listOf(
+    "https://raw.githubusercontent.com/neteasecloudmusicapienhanced/api-enhanced/main/public/audio_match_demo/afp.wasm.js",
+    "https://cdn.jsdelivr.net/gh/neteasecloudmusicapienhanced/api-enhanced@main/public/audio_match_demo/afp.wasm.js",
+)
+val fingerprintWasmBinary = Regex("WASM_BINARY\\s*=\\s*\"([A-Za-z0-9+/=]+)\"")
+val minFingerprintWasmBytes = 100_000
+
+val fetchFingerprintWasm by tasks.registering {
+    group = "build"
+    description = "从上游取听歌识曲的指纹 wasm 写进 assets（已存在就跳过）"
+    outputs.file(fingerprintWasm)
+    doLast {
+        val target = fingerprintWasm.asFile
+        if (target.isFile && target.length() > minFingerprintWasmBytes) {
+            logger.lifecycle("指纹 wasm 已在本地，跳过下载")
+            return@doLast
+        }
+        val source = fingerprintWasmSources.firstNotNullOfOrNull { url ->
+            runCatching { URI(url).toURL().readBytes().toString(Charsets.UTF_8) }
+                .onFailure { logger.info("取指纹 wasm 失败：$url（${it.message}）") }
+                .getOrNull()
+        }
+        val encoded = source?.let { fingerprintWasmBinary.find(it)?.groupValues?.get(1) }
+        val bytes = encoded?.let { runCatching { Base64.getDecoder().decode(it) }.getOrNull() }
+        if (bytes == null || bytes.size < minFingerprintWasmBytes) {
+            logger.warn("没取到指纹 wasm：识曲会退化成「没听出来」（界面上会写明资源缺失）")
+            return@doLast
+        }
+        target.parentFile.mkdirs()
+        target.writeBytes(bytes)
+        logger.lifecycle("指纹 wasm 已取到：${bytes.size} 字节 → ${target.relativeTo(projectDir)}")
+    }
+}
+
+tasks.named("preBuild") { dependsOn(fetchFingerprintWasm) }
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")

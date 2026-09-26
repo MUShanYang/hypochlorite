@@ -31,6 +31,7 @@ import app.hypochlorite.player.ListenTogetherState
 import app.hypochlorite.player.PlaybackService
 import app.hypochlorite.player.PlayerClock
 import app.hypochlorite.player.PlayerSnapshot
+import app.hypochlorite.player.running
 import app.hypochlorite.player.clock
 import app.hypochlorite.player.sameUiAs
 import app.hypochlorite.player.audioOutputs
@@ -487,10 +488,10 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
         viewModelScope.launch {
             var seenHitSeq = app.audioMatch.state.value.hitSeq
             app.audioMatch.state.collect { am ->
-                // 采集窗口一关就收回自家播放：暂停只为「那 3 秒别录进自己的声音」而存在，
-                // 没理由让用户音乐在随后几秒算指纹 + 走网络期间继续哑着。
+                // 自家播放要一直哑到整条链跑完：一轮识别可能连听几段（见 AUDIO_MATCH_ATTEMPTS），
+                // 中途放开会让下一段录到我们自己 —— 所以判的是「离开全部在跑的阶段」，不是「离开采集阶段」。
                 // cancel() 会把阶段打回 Idle，所以「中止」和「返回」也都走这一条。
-                if (pausedOwnForCapture && am.phase != AudioMatchPhase.Capturing) releaseCapturePause()
+                if (pausedOwnForCapture && !am.phase.running) releaseCapturePause()
                 _ui.update { it.copy(audioMatch = am) }
                 // 命中就接管播放并弹详情页 —— 识别页不再自己演命中，结果直接落在详情页上。
                 // 只认比进来时更新的 seq：引擎挂在 Application 上，重进页面不该把上一次命中再演一遍。
@@ -608,14 +609,6 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
 
     /** 识别页的即时提示（授权被拒之类），走 toast 不占阶段状态。 */
     fun audioMatchNote(message: String) = app.audioMatch.notify(message)
-
-    /**
-     * 识别页动画的电平源：抓到的是**系统音频**峰值，不是自家播放器。
-     *
-     * 不能再用 audioLevel()：HypochloritePlayer 那边 `if (!exo.isPlaying) return 0f`，
-     * 而识别期间我们自己正是暂停的 —— 最需要动画的三秒里那条输入恒为 0。
-     */
-    fun captureLevel(): Float = app.systemAudio.captureLevel
 
     /**
      * 用户在系统录屏授权框点了允许 → 交给控制器去起前台服务并创建投影。

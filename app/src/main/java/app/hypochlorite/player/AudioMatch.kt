@@ -38,6 +38,16 @@ val AudioMatchPhase.running: Boolean
         this == AudioMatchPhase.Matching
 
 /**
+ * 一次点按最多听几段。每段都是 [app.hypochlorite.audio.AUDIO_MATCH_SECONDS] 秒，
+ * 第一段没中就换个位置再听一段（见 [AudioMatch.start]）。
+ *
+ * 为什么不是把单段拉长：实测这道接口 7 秒以上的 query 指纹稳定认不出来（3/4/6 秒能中，
+ * 5/7/8/10 秒无果）—— 它是围绕 3 秒那套 query 设计的。多次短段才是「多听一会儿」的正解，
+ * 也是官方客户端在做的事（它给人的「三十秒」其实是多次尝试的总时长）。
+ */
+const val AUDIO_MATCH_ATTEMPTS = 3
+
+/**
  * 识曲状态。
  *
  * 引擎只负责跑到 [Hit]/[NoResult]/[Error] 并停下，**不自己播放、也不自己切页** ——
@@ -53,6 +63,8 @@ data class AudioMatchState(
     val hit: Song? = null,
     val toast: String? = null,
     val hitSeq: Long = 0,
+    /** 当前听到第几段（1 起，上限 [AUDIO_MATCH_ATTEMPTS]）。界面用它显示重试进度。 */
+    val attempt: Int = 1,
 )
 
 /**
@@ -67,8 +79,10 @@ typealias AudioMatchMatcher = suspend (fingerprint: String, durationSeconds: Int
 /**
  * 听歌识曲引擎。
  *
- * 三步串行：采集 → 算指纹 → 比对。[generation] 计数保证被 [cancel] 掉的旧链路不会把
- * 状态复活（照 [ListenTogether] 的做法）。采集源在构造期定死（Android 10+ 用真投影源，
+ * 一轮 = 最多 [AUDIO_MATCH_ATTEMPTS] 段，每段走「采集 → 算指纹 → 比对」；某段命中就当场收工，
+ * 全落空才停 [AudioMatchPhase.NoResult]。分段而不是拉长单段，是因为这道接口对超过 6 秒的 query
+ * 指纹稳定不认（见 [AUDIO_MATCH_ATTEMPTS] 的注释）。[generation] 计数保证被 [cancel] 掉的旧链路
+ * 不会把状态复活（照 [ListenTogether] 的做法）。采集源在构造期定死（Android 10+ 用真投影源，
  * 低版本退回正弦源，见 HypochloriteApplication 的接线），引擎自己不切线程。
  * 网络那一步由 OkHttp 的连接/读取超时兜底（见 `NeteaseClient.defaultHttp`），引擎不再叠一层超时。
  */
@@ -92,25 +106,36 @@ class AudioMatch(
         val gen = ++generation
         job = scope.launch {
             try {
-                _state.update { it.copy(phase = AudioMatchPhase.Capturing, hit = null, toast = null) }
-                val pcm = capture.capture(AUDIO_MATCH_SECONDS)
-                if (gen != generation) return@launch
-                val heard = peakOf(pcm) >= SilentPeak
+                var heard = false
+                var attempt = 0
+                var hits: List<AudioMatchHit> = emptyList()
+                // 一次采集会话里连续听、边听边算：第 n 段算指纹/比对时，第 n+1 段正在录
+                // （见 AudioCaptureSource.stream）。命中就返回 false，采集当场停，后面的段不听了。
+                _state.update {
+                    it.copy(phase = AudioMatchPhase.Capturing, hit = null, toast = null, attempt = 1)
+                }
+                capture.stream(AUDIO_MATCH_SECONDS, AUDIO_MATCH_ATTEMPTS) { pcm ->
+                    if (gen != generation) return@stream false
+                    attempt += 1
+                    heard = heard || peakOf(pcm) >= SilentPeak
 
-                _state.update { it.copy(phase = AudioMatchPhase.Fingerprinting) }
-                val fp = generator.generate(pcm)
-                if (gen != generation) return@launch
+                    _state.update { it.copy(phase = AudioMatchPhase.Fingerprinting, attempt = attempt) }
+                    val fp = generator.generate(pcm)
+                    if (gen != generation) return@stream false
 
-                _state.update { it.copy(phase = AudioMatchPhase.Matching) }
-                val result = matcher(fp, AUDIO_MATCH_SECONDS)
+                    _state.update { it.copy(phase = AudioMatchPhase.Matching, attempt = attempt) }
+                    hits = matcher(fp, AUDIO_MATCH_SECONDS)
+                    if (gen != generation) return@stream false
+                    hits.isEmpty()
+                }
                 if (gen != generation) return@launch
-                finish(gen, result, heard)
+                finish(gen, hits, heard)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                // 异常不重试：采集/指纹/网络抛出来的（"录音初始化失败…"）重试大概率还是同样结果，
+                // 原样透出去比一句笼统的"识别失败"有用得多 —— 真机上排查全靠它。
                 if (gen == generation) {
-                    // 采集/指纹层抛的都是写给用户看的中文（"录音初始化失败…"），原样透出去比
-                    // 一句笼统的"识别失败"有用得多 —— 真机上排查全靠它。
                     val why = e.message?.takeIf { it.isNotBlank() } ?: "识别失败，再试一次"
                     _state.update { it.copy(phase = AudioMatchPhase.Error, hit = null, toast = why) }
                 }

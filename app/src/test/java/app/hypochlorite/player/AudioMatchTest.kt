@@ -144,6 +144,60 @@ class AudioMatchTest {
     }
 
     @Test
+    fun `第一段没中就再听一段，第二段命中`() = runTest {
+        val capture = FakeCapture()
+        val generator = FakeGenerator()
+        var queries = 0
+        val engine = AudioMatch(this, capture, generator, matcher = { _, _ ->
+            queries += 1
+            if (queries == 1) emptyList() else listOf(hit("77"))
+        })
+        engine.start()
+        advanceUntilIdle()
+
+        assertEquals(AudioMatchPhase.Hit, engine.state.value.phase)
+        assertEquals("77", engine.state.value.hit?.id)
+        // 命中即刻停：只听了两段、只算了两段指纹，第三段不再听
+        assertEquals(2, capture.calls)
+        assertEquals(2, generator.calls)
+        assertEquals(2, engine.state.value.attempt)
+        assertEquals(1, engine.state.value.hitSeq)
+    }
+
+    @Test
+    fun `全都没中就听满上限再停在 NoResult`() = runTest {
+        val capture = FakeCapture()
+        val engine = AudioMatch(this, capture, FakeGenerator(), matcher = { _, _ -> emptyList() })
+        engine.start()
+        advanceUntilIdle()
+
+        assertEquals(AudioMatchPhase.NoResult, engine.state.value.phase)
+        assertEquals(AUDIO_MATCH_ATTEMPTS, capture.calls)
+        assertEquals(AUDIO_MATCH_ATTEMPTS, engine.state.value.attempt)
+        assertNull(engine.state.value.hit)
+    }
+
+    @Test
+    fun `中止之后不再为下一段算指纹`() = runTest {
+        val gate = CompletableDeferred<List<AudioMatchHit>>()
+        val generator = FakeGenerator()
+        val engine = AudioMatch(this, FakeCapture(), generator, matcher = { _, _ -> gate.await() })
+        engine.start()
+        advanceUntilIdle()
+        assertEquals(AudioMatchPhase.Matching, engine.state.value.phase)
+        assertEquals(1, generator.calls)
+
+        engine.cancel()
+        // 迟到的空结果回来：generation 已经变了，不该再领着采集去听第二段
+        gate.complete(emptyList())
+        advanceUntilIdle()
+
+        assertEquals(AudioMatchPhase.Idle, engine.state.value.phase)
+        assertEquals(1, generator.calls)
+        assertNull(engine.state.value.hit)
+    }
+
+    @Test
     fun `notify sets toast and clearToast drops it`() = runTest {
         val engine = AudioMatch(this, FakeCapture(), FakeGenerator(), matcher = { _, _ -> listOf(hit("1")) })
         engine.notify("歌名")
