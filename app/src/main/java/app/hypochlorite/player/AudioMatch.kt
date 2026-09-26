@@ -3,6 +3,7 @@ package app.hypochlorite.player
 import app.hypochlorite.audio.AudioCaptureSource
 import app.hypochlorite.audio.AudioFingerprintGenerator
 import app.hypochlorite.audio.AUDIO_MATCH_SECONDS
+import app.hypochlorite.audio.peakOf
 import app.hypochlorite.netease.AudioMatchHit
 import app.hypochlorite.netease.Song
 import kotlinx.coroutines.CancellationException
@@ -39,6 +40,8 @@ data class AudioMatchState(
     val error: String? = null,
     val toast: String? = null,
     val hitSeq: Long = 0,
+    /** 本次采集到的峰值 [0,1]。指纹还是假的，这是「到底有没有抓到声音」唯一的可验证信号。 */
+    val capturedPeak: Float = 0f,
 )
 
 /**
@@ -61,7 +64,8 @@ typealias AudioMatchMatcher = suspend (fingerprint: String, durationSeconds: Int
  */
 class AudioMatch(
     private val scope: CoroutineScope,
-    private val capture: AudioCaptureSource,
+    /** 运行时可在假源 ↔ 真系统音频源之间切换（[app.hypochlorite.HypochloriteApplication] 接线）。 */
+    var capture: AudioCaptureSource,
     private val generator: AudioFingerprintGenerator,
     private val matcher: AudioMatchMatcher,
 ) {
@@ -83,10 +87,12 @@ class AudioMatch(
         job = scope.launch {
             try {
                 _state.update {
-                    it.copy(phase = AudioMatchPhase.Capturing, hit = null, hits = emptyList(), error = null, toast = null)
+                    it.copy(phase = AudioMatchPhase.Capturing, hit = null, hits = emptyList(), error = null, toast = null, capturedPeak = 0f)
                 }
                 val pcm = capture.capture(AUDIO_MATCH_SECONDS)
                 if (gen != generation) return@launch
+                val peak = peakOf(pcm)
+                _state.update { it.copy(capturedPeak = peak) }
 
                 _state.update { it.copy(phase = AudioMatchPhase.Fingerprinting) }
                 val fp = generator.generate(pcm)

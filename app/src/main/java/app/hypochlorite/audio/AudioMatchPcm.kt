@@ -86,6 +86,19 @@ const val AUDIO_MATCH_SECONDS = 3
 const val AUDIO_MATCH_SAMPLE_RATE = 8000
 
 /**
+ * 一段归一化 PCM 的峰值 [0,1]。假指纹阶段识别必无果，用它把「到底有没有抓到声音」
+ * 透到界面上，作为抓取链路唯一的可验证信号。空数组给 0。
+ */
+fun peakOf(pcm: FloatArray): Float {
+    var peak = 0f
+    for (v in pcm) {
+        val a = if (v < 0f) -v else v
+        if (a > peak) peak = a
+    }
+    return peak.coerceIn(0f, 1f)
+}
+
+/**
  * 音频指纹提取器 —— [NeteaseClient.audioMatch] 的唯一上游。
  *
  * 输入是 [AUDIO_MATCH_SAMPLE_RATE] 单声道归一化 Float32（[downmixPcmToFloat] +

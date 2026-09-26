@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.media3.session.MediaSession
 import app.hypochlorite.audio.FakeAudioFingerprintGenerator
 import app.hypochlorite.audio.SineAudioCaptureSource
+import app.hypochlorite.audio.SystemAudioController
 import app.hypochlorite.netease.NeteaseClient
 import app.hypochlorite.netease.SessionStore
 import app.hypochlorite.player.AudioMatch
@@ -59,6 +60,8 @@ class HypochloriteApplication : Application(), ImageLoaderFactory {
         private set
     lateinit var audioMatch: AudioMatch
         private set
+    lateinit var systemAudio: SystemAudioController
+        private set
     var mediaSession: MediaSession? = null
         private set
 
@@ -78,6 +81,7 @@ class HypochloriteApplication : Application(), ImageLoaderFactory {
         client = NeteaseClient(session, http)
         player = HypochloritePlayer(this, client, scope, http, session)
         listen = ListenTogether(client, player, session, scope)
+        systemAudio = SystemAudioController(this)
         // 采集源和指纹生成器都是假的（UI 链路阶段）；正式实现换 SineAudioCaptureSource →
         // 真 MediaProjection 源、FakeAudioFingerprintGenerator → Chicory 提取器，第 6 步。
         audioMatch = AudioMatch(

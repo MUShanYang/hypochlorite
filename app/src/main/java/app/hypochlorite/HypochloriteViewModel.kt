@@ -27,6 +27,7 @@ import app.hypochlorite.netease.Song
 import app.hypochlorite.netease.parseListenInvite
 import app.hypochlorite.player.AudioMatchPhase
 import app.hypochlorite.player.AudioMatchState
+import app.hypochlorite.audio.SineAudioCaptureSource
 import app.hypochlorite.player.ListenTogetherState
 import app.hypochlorite.player.PlaybackService
 import app.hypochlorite.player.PlayerClock
@@ -331,6 +332,10 @@ data class HomeState(
     val listenInput: String = "",
     /** 听歌识曲引擎状态。见 [app.hypochlorite.player.AudioMatch]。 */
     val audioMatch: AudioMatchState = AudioMatchState(),
+    /** 抓取源是否切到「系统音频」（MediaProjection）。false = 用假正弦源。 */
+    val audioSystemCapture: Boolean = false,
+    /** 系统音频是否已授权可用（投影就绪）。低版本恒 false。 */
+    val audioCaptureReady: Boolean = false,
     /** 底栏长按跳列表的目标行。null = 没有待处理的高亮。 */
     val pendingListJump: Int? = null,
     /** 同一行连续长按也要重新滚一次 —— 索引相同的话 State 去重会让 effect 不重跑。 */
@@ -470,6 +475,12 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
                 _ui.update { it.copy(audioMatch = am) }
             }
         }
+        // 系统音频投影就绪状态：驱动识别页「抓系统音频」开关能否点亮
+        viewModelScope.launch {
+            app.systemAudio.ready.collect { ready ->
+                _ui.update { it.copy(audioCaptureReady = ready) }
+            }
+        }
         // 续房放在最后：它会改播放器队列，要等 restoreAndResume 把本地队列铺好之后，
         // 否则会被本地恢复的队列盖掉。
         viewModelScope.launch {
@@ -536,6 +547,38 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
     fun cancelAudioMatch() = app.audioMatch.cancel()
 
     fun clearAudioMatchToast() = app.audioMatch.clearToast()
+
+    /** 识别页的即时提示（授权被拒之类），走 toast 不占阶段状态。 */
+    fun audioMatchNote(message: String) = app.audioMatch.notify(message)
+
+    /**
+     * 切「抓系统音频 ↔ 抓假正弦」。开：换成 MediaProjection 源（还没授权就等开关右侧的授权流程）；
+     * 关：换回无状态正弦源并收掉前台服务/投影，别让它白占着录屏通知。
+     */
+    fun setAudioSystemCapture(on: Boolean) {
+        if (on) {
+            if (!app.systemAudio.supported) return
+            app.audioMatch.capture = app.systemAudio.newCaptureSource()
+        } else {
+            app.audioMatch.capture = SineAudioCaptureSource()
+            app.systemAudio.endCapture()
+        }
+        _ui.update { it.copy(audioSystemCapture = on) }
+    }
+
+    /** 用户在系统录屏授权框点了允许 → 交给控制器去起前台服务并创建投影。 */
+    fun submitAudioProjectionResult(resultCode: Int, data: android.content.Intent) {
+        app.systemAudio.beginCapture(resultCode, data)
+    }
+
+    /** 离开识别页：若在抓系统音频，收掉投影与前台服务。 */
+    private fun teardownAudioCapture() {
+        if (_ui.value.audioSystemCapture) {
+            app.audioMatch.capture = SineAudioCaptureSource()
+            app.systemAudio.endCapture()
+            _ui.update { it.copy(audioSystemCapture = false, audioCaptureReady = false) }
+        }
+    }
 
     /**
      * 命中后的交接：先播这首（抢音频焦点，守规矩的后台 App 会自行暂停），
@@ -1454,7 +1497,10 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
             Route.ListenTogether -> {}
             // 识别是"点了才录 3 秒"的一次性动作，离开页面就该把在跑的采集掐掉，
             // 免得回头进来看还挂着半截链路。
-            Route.AudioMatch -> app.audioMatch.cancel()
+            Route.AudioMatch -> {
+                app.audioMatch.cancel()
+                teardownAudioCapture()
+            }
             Route.Home -> return
             else -> {}
         }

@@ -1,0 +1,67 @@
+package app.hypochlorite.audio
+
+import android.content.Context
+import android.content.Intent
+import android.media.projection.MediaProjection
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+/**
+ * 系统音频抓取的总闸。挂在 [app.hypochlorite.HypochloriteApplication] 上。
+ *
+ * 抓别的 App 的声音只有 MediaProjection 一条路，而它有两道硬约束：
+ * 1. 授权 Intent 用一次即废（14+ 复用旧 data 直接 SecurityException）——所以每次识别都现取。
+ * 2. 用投影前必须先起一个 mediaProjection 类型的前台服务——所以 [projection] 由
+ *    [AudioCaptureService] 创建后回交，而不是这边直接 getMediaProjection。
+ *
+ * [ready] 翻 true 才代表投影可用、可以识别。UI 盯着它决定"抓系统音频"开关能否点亮。
+ */
+class SystemAudioController(private val appContext: Context) {
+
+    private val _ready = MutableStateFlow(false)
+    val ready: StateFlow<Boolean> = _ready.asStateFlow()
+
+    @Volatile
+    var projection: MediaProjection? = null
+        private set
+
+    val supported: Boolean
+        get() = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q
+
+    /**
+     * 用户在系统授权框点了允许 → 起前台服务，由服务去 getMediaProjection。
+     * 结果异步回到 [onProjectionReady]。
+     */
+    fun beginCapture(resultCode: Int, data: Intent) {
+        val intent = Intent(appContext, AudioCaptureService::class.java).apply {
+            putExtra(AudioCaptureService.EXTRA_RESULT_CODE, resultCode)
+            putExtra(AudioCaptureService.EXTRA_DATA, data)
+        }
+        runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 26) appContext.startForegroundService(intent)
+            else appContext.startService(intent)
+        }
+    }
+
+    /** 由 [AudioCaptureService] 在拿到投影后回调。 */
+    fun onProjectionReady(mp: MediaProjection) {
+        projection = mp
+        _ready.value = true
+    }
+
+    /** 投影失效（用户在系统面板停止共享 / 服务被杀）时回调，收回可识别状态。 */
+    fun onProjectionLost() {
+        projection = null
+        _ready.value = false
+    }
+
+    /** 结束抓取会话：停服务、stop 投影。离开识别页或关掉开关时调。 */
+    fun endCapture() {
+        runCatching { appContext.stopService(Intent(appContext, AudioCaptureService::class.java)) }
+        projection?.let { mp -> runCatching { mp.stop() } }
+        onProjectionLost()
+    }
+
+    fun newCaptureSource(): AudioCaptureSource = MediaProjectionCaptureSource(this)
+}
