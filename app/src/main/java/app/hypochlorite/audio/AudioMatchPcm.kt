@@ -108,4 +108,7 @@ fun peakOf(pcm: FloatArray): Float {
  */
 interface AudioFingerprintGenerator {
     suspend fun generate(pcmMono8k: FloatArray): String
+
+    /** 可选预热（建宿主 / AOT Machine）。默认空操作。 */
+    suspend fun warmUp() {}
 }

@@ -117,7 +117,13 @@ class AudioMatch(
                 capture.stream(AUDIO_MATCH_SECONDS, AUDIO_MATCH_ATTEMPTS) { pcm ->
                     if (gen != generation) return@stream false
                     attempt += 1
-                    heard = heard || peakOf(pcm) >= SilentPeak
+                    // 静音段不算指纹、不打网络：省掉 AOT/接口开销，继续听下一段；
+                    // 全静音时 finish 走「没听到声音」（heard 仍是 false）。
+                    if (peakOf(pcm) < SilentPeak) {
+                        _state.update { it.copy(phase = AudioMatchPhase.Capturing, attempt = attempt) }
+                        return@stream true
+                    }
+                    heard = true
 
                     _state.update { it.copy(phase = AudioMatchPhase.Fingerprinting, attempt = attempt) }
                     val fp = generator.generate(pcm)
@@ -182,6 +188,13 @@ class AudioMatch(
      */
     fun resetToIdle() {
         _state.update { it.copy(phase = AudioMatchPhase.Idle, hit = null) }
+    }
+
+    /** 进识别页时预热指纹宿主（AOT Machine）。失败忽略，点按时还会再建。 */
+    fun warmGenerator() {
+        scope.launch {
+            runCatching { generator.warmUp() }
+        }
     }
 
     fun clearToast() {

@@ -18,11 +18,14 @@ import org.junit.Test
 
 class AudioMatchTest {
 
-    private class FakeCapture : AudioCaptureSource {
+    /**
+     * @param peak 样本峰值。默认 0.1（明显高于 SilentPeak），全 0 用来测静音跳过。
+     */
+    private class FakeCapture(private val peak: Float = 0.1f) : AudioCaptureSource {
         var calls = 0
         override suspend fun capture(durationSeconds: Int): FloatArray {
             calls++
-            return FloatArray(durationSeconds * 8000)
+            return FloatArray(durationSeconds * 8000) { peak }
         }
     }
 
@@ -206,5 +209,46 @@ class AudioMatchTest {
         assertEquals("歌名", engine.state.value.toast) // 空消息不改
         engine.clearToast()
         assertNull(engine.state.value.toast)
+    }
+
+    @Test
+    fun `静音段跳过指纹与比对，全静音走没听到声音`() = runTest {
+        val capture = FakeCapture(peak = 0f)
+        val generator = FakeGenerator()
+        var matchCalls = 0
+        val engine = AudioMatch(this, capture, generator, matcher = { _, _ ->
+            matchCalls += 1
+            emptyList()
+        })
+        engine.start()
+        advanceUntilIdle()
+
+        assertEquals(AudioMatchPhase.NoResult, engine.state.value.phase)
+        assertEquals(AUDIO_MATCH_ATTEMPTS, capture.calls)
+        assertEquals(0, generator.calls)
+        assertEquals(0, matchCalls)
+        assertTrue(engine.state.value.toast!!.contains("没听到声音"))
+    }
+
+    @Test
+    fun `前段静音后段有声仍会算指纹`() = runTest {
+        var captureCalls = 0
+        val capture = object : AudioCaptureSource {
+            override suspend fun capture(durationSeconds: Int): FloatArray {
+                captureCalls++
+                // 第 1 段静音，第 2 段有声
+                val peak = if (captureCalls == 1) 0f else 0.1f
+                return FloatArray(durationSeconds * 8000) { peak }
+            }
+        }
+        val generator = FakeGenerator()
+        val engine = AudioMatch(this, capture, generator, matcher = { _, _ -> listOf(hit("9")) })
+        engine.start()
+        advanceUntilIdle()
+
+        assertEquals(AudioMatchPhase.Hit, engine.state.value.phase)
+        assertEquals(2, captureCalls)
+        assertEquals(1, generator.calls)
+        assertEquals("9", engine.state.value.hit?.id)
     }
 }

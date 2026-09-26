@@ -65,7 +65,7 @@ class FakeAudioFingerprintGenerator : AudioFingerprintGenerator {
     }
 
     private companion object {
-        /** 真提取器在 Chicory 上单次 2.3~3.4s（JVM 实测，Node 原生 wasm 是 30~75ms），兜底时不必真等那么久。 */
+        /** 真提取器 AOT 后 warm 约 70–80ms（JVM 实测；解释器时代 2.3~3.4s），兜底时不必真等那么久。 */
         const val FingerprintFakeMillis = 300L
 
         /** 288 字节 → 384 base64 字符。真指纹长度随内容变（实测 3 秒 738~786 字节），这定值只是同量级的占位。 */

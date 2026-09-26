@@ -32,7 +32,8 @@ class RealRecognitionProbeTest {
         assumeTrue(System.getenv("HYPO_ONLINE_PROBE") == "1")
         val wasm = File("src/main/assets/netease/afp.query.wasm")
         assumeTrue("缺少 afp.query.wasm", wasm.isFile)
-        val generator = NcmFingerprintWasm(wasm.readBytes())
+        assumeTrue("指纹 AOT 不可用", NcmFingerprintWasm.isAvailable())
+        val generator = NcmFingerprintWasm()
         val http = OkHttpClient()
 
         var attempted = 0

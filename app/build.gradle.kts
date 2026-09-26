@@ -75,8 +75,13 @@ android {
 // 识曲指纹是上游（网易）编出来的私有 wasm，**不进仓库**（见 .gitignore）。构建时从上游公开地址取一次，
 // 写进 assets —— 上游把它以 base64 内嵌在 afp.wasm.js 里，解出来就是原始 wasm。
 //
-// 取不到只警告、不让构建失败：App 会优雅降级成假指纹（识别必然「没听出来」，识别页上有明显提示），
+// 取到之后再跑 Chicory **构建期 AOT**（`compileFingerprintWasmAot`）：把 wasm 编成 JVM 字节码 jar，
+// 运行时用 AfpQueryModule 而不是 InterpreterMachine。大函数若超 JVM 方法上限会 WARN 并回退解释器，
+// 本模块实测全部可 AOT。
+//
+// 取不到只警告、不让构建失败：AOT 任务会写 stub，App 退回假指纹（识别必然「没听出来」），
 // 本地断网也照常能编。CI 那边由 workflow 里的一步断言文件存在，保证发出去的包不是半残。
+val chicoryVersion = "1.7.5"
 val fingerprintWasm = layout.projectDirectory.file("src/main/assets/netease/afp.query.wasm")
 
 // 同一份文件的两个来源：GitHub raw 为主，jsDelivr 兜底（国内网络常只通其中一个）。
@@ -114,7 +119,71 @@ val fetchFingerprintWasm by tasks.registering {
     }
 }
 
-tasks.named("preBuild") { dependsOn(fetchFingerprintWasm) }
+// --- Chicory build-time AOT -------------------------------------------------
+val chicoryAot = configurations.create("chicoryAot")
+val chicoryAotRuntime = configurations.create("chicoryAotRuntime")
+val afpAotWorkDir = layout.buildDirectory.dir("generated/chicory-afp")
+val afpAotJar = layout.buildDirectory.file("generated/chicory-afp/afp-aot.jar")
+val compileAfpAotTool = rootProject.layout.projectDirectory.file("tools/CompileAfpAot.java")
+val compileAfpAotToolClassDir = layout.buildDirectory.dir("chicory-aot-tool")
+
+dependencies {
+    chicoryAot("com.dylibso.chicory:build-time-compiler:$chicoryVersion")
+    // javac the generated AfpQueryModule facade against the same runtime the app uses.
+    chicoryAotRuntime("com.dylibso.chicory:runtime:$chicoryVersion")
+}
+
+val compileFingerprintWasmAot by tasks.registering {
+    group = "build"
+    description = "把 afp.query.wasm 编成 Chicory AOT jar（缺 wasm 时写 stub）"
+    dependsOn(fetchFingerprintWasm)
+    // wasm 可能尚未取到：缺文件时 CompileAfpAot 写 stub，不让配置期因 inputs 报错。
+    inputs.files(fingerprintWasm).optional()
+    inputs.file(compileAfpAotTool)
+    outputs.file(afpAotJar)
+    doLast {
+        val toolSrc = compileAfpAotTool.asFile
+        val toolOut = compileAfpAotToolClassDir.get().asFile
+        toolOut.mkdirs()
+        val aotCp = chicoryAot.asPath
+        val javaHome = System.getProperty("java.home")
+        val javac = file("$javaHome/bin/javac").takeIf { it.isFile }
+            ?: file("$javaHome/../bin/javac")
+        exec {
+            commandLine(
+                javac.absolutePath,
+                "-encoding", "UTF-8",
+                "-source", "17",
+                "-target", "17",
+                "-cp", aotCp,
+                "-d", toolOut.absolutePath,
+                toolSrc.absolutePath,
+            )
+        }
+        val work = afpAotWorkDir.get().asFile
+        val jar = afpAotJar.get().asFile
+        javaexec {
+            classpath = files(toolOut) + chicoryAot
+            mainClass.set("CompileAfpAot")
+            args(
+                fingerprintWasm.asFile.absolutePath,
+                jar.absolutePath,
+                work.resolve("work").absolutePath,
+                chicoryAotRuntime.asPath,
+            )
+        }
+    }
+}
+
+tasks.named("preBuild") {
+    dependsOn(fetchFingerprintWasm)
+    dependsOn(compileFingerprintWasmAot)
+}
+
+// Unit tests / Kotlin compile also need the AOT jar before javac sees AfpQueryModule.
+tasks.matching { it.name.startsWith("compile") && it.name.contains("Kotlin", ignoreCase = true) }.configureEach {
+    dependsOn(compileFingerprintWasmAot)
+}
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
@@ -137,8 +206,9 @@ dependencies {
     implementation("androidx.media:media:1.7.0")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    // 听歌识曲的指纹：纯 JVM 的 wasm 解释器，跑上游那段网易的 C++→wasm 指纹生成器（零 native 代码）。
-    implementation("com.dylibso.chicory:runtime:1.7.5")
+    // 听歌识曲指纹：Chicory runtime + 构建期 AOT jar（见 compileFingerprintWasmAot）。
+    implementation("com.dylibso.chicory:runtime:$chicoryVersion")
+    implementation(files(afpAotJar).builtBy(compileFingerprintWasmAot))
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.google.zxing:core:3.5.3")

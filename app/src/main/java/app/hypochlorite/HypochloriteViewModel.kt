@@ -563,9 +563,10 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
 
     fun openAudioMatch() = push(Route.AudioMatch)
 
-    /** 进识别页时若停在上次结果上，收回空闲，避免一进页面就显示旧命中。 */
+    /** 进识别页时若停在上次结果上，收回空闲，避免一进页面就显示旧命中；顺带预热指纹宿主。 */
     fun enterAudioMatch() {
         if (_ui.value.audioMatch.phase != AudioMatchPhase.Idle) app.audioMatch.resetToIdle()
+        app.audioMatch.warmGenerator()
     }
 
     /** 授权给了但投影迟迟不回交时占的等待协程。攒着它，免得连点起两组等待。 */

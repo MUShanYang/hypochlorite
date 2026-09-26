@@ -1,12 +1,11 @@
 package app.hypochlorite.audio
 
+import app.hypochlorite.audio.wasm.AfpQueryModule
 import com.dylibso.chicory.runtime.HostFunction
 import com.dylibso.chicory.runtime.Instance
-import com.dylibso.chicory.runtime.InterpreterMachine
+import com.dylibso.chicory.runtime.Machine
 import com.dylibso.chicory.runtime.Store
 import com.dylibso.chicory.runtime.WasmFunctionHandle
-import com.dylibso.chicory.wasm.Parser
-import com.dylibso.chicory.wasm.WasmModule
 import com.dylibso.chicory.wasm.types.ExternalType
 import com.dylibso.chicory.wasm.types.FunctionImport
 import com.dylibso.chicory.wasm.types.FunctionType
@@ -19,7 +18,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * 网易听歌识曲的指纹提取：在 JVM 里用 Chicory 直接跑官方那段 wasm。
+ * 网易听歌识曲的指纹提取：构建期把上游 wasm 编成 JVM 字节码（Chicory AOT），运行时直接调。
  *
  * 关键结论（Node 侧实测）：**不用复刻 embind**。那 27 个 import 里只有 `a.r`（memcpy）
  * 会参与算法本身，其余全是类型注册的簿记调用，空实现就能跑出与官方逐字节相同的指纹。
@@ -31,36 +30,47 @@ import kotlinx.coroutines.withContext
  *
  * 导出名被上游 mangle 成了单字母（`C`=静态初始化、`E`=malloc），识曲函数不是导出而是表项，
  * 所以它的坐标从 `__embind_register_function` 的参数里现取，不写死在代码里。
+ *
+ * AOT 由 `app` 模块的 `compileFingerprintWasmAot` 任务在构建期生成 [AfpQueryModule]；
+ * 解释器路径已去掉。JVM 实测 warm 指纹从约 2.3s 降到约 70–80ms，golden 字节不变。
  */
-class NcmFingerprintWasm(private val wasmBytes: ByteArray) : AudioFingerprintGenerator {
+class NcmFingerprintWasm : AudioFingerprintGenerator {
 
     private val mutex = Mutex()
 
-    /** 解释器实例建起来不便宜，建一次复用到进程结束。 */
+    /** AOT 实例建起来不便宜，建一次复用到进程结束。 */
     private var host: Host? = null
 
     /**
      * 提取指纹。[pcmMono8k] 必须是 8kHz 单声道、[-1,1] 归一的 Float32（见 [AUDIO_MATCH_SAMPLE_RATE]）。
      *
-     * 解释执行 3 秒音频要 2 秒上下（JVM 实测 cold 2.4s / warm 2.3s），所以自己挪出调用线程；
      * 锁同时护住「只建一个实例」和「wasm 内部全局状态不被并发踩到」。
      */
     override suspend fun generate(pcmMono8k: FloatArray): String = withContext(Dispatchers.Default) {
         mutex.withLock {
-            val h = host ?: Host(wasmBytes).also { host = it }
+            val h = host ?: Host().also { host = it }
             h.fingerprint(pcmMono8k)
         }
     }
 
-    private class Host(wasmBytes: ByteArray) {
-        private val module: WasmModule = Parser.parse(wasmBytes)
+    /** 进识别页时预热：把 AOT Machine / 静态初始化先跑完，第一次点按少等一段冷启动。 */
+    override suspend fun warmUp() {
+        withContext(Dispatchers.Default) {
+            mutex.withLock {
+                if (host == null) host = Host()
+            }
+        }
+    }
+
+    private class Host {
+        private val module = AfpQueryModule.load()
 
         /** 识曲函数在 wasm 表里的两个槽位，由静态初始化期间的注册回调填。 */
         private var invokeSlot = -1
         private var targetSlot = -1
 
         private val instance: Instance
-        private val machine: InterpreterMachine
+        private val machine: Machine
         private val mallocFunc: Int
         private var invokeFunc = -1
 
@@ -71,8 +81,14 @@ class NcmFingerprintWasm(private val wasmBytes: ByteArray) : AudioFingerprintGen
                 val type = module.typeSection().getType(imp.typeIndex())
                 store.addFunction(HostFunction(imp.module(), imp.name(), type, handlerFor(imp.name(), type)))
             }
-            instance = store.instantiate("afp", module)
-            machine = InterpreterMachine(instance)
+            instance = store.instantiate("afp") { imports ->
+                Instance.builder(AfpQueryModule.load())
+                    .withMachineFactory(AfpQueryModule::create)
+                    .withImportValues(imports)
+                    .withStart(false)
+                    .build()
+            }
+            machine = instance.getMachine()
             machine.call(exportedFunc("C"), longArrayOf())
             mallocFunc = exportedFunc("E")
             if (invokeSlot < 0) error("afp.query.wasm 没有注册 $QUERY_FUNCTION，指纹资源与代码不匹配")
@@ -143,5 +159,10 @@ class NcmFingerprintWasm(private val wasmBytes: ByteArray) : AudioFingerprintGen
             /** 指纹长度随音频内容变（实测 3 秒：纯正弦 288B，真歌 738~786B），这里只挡越界读。 */
             const val MAX_FINGERPRINT_BYTES = 64 * 1024
         }
+    }
+
+    companion object {
+        /** 构建期是否成功编出了可用的 AOT 模块（缺 wasm 时是 stub，load 会抛）。 */
+        fun isAvailable(): Boolean = runCatching { AfpQueryModule.load(); true }.getOrDefault(false)
     }
 }

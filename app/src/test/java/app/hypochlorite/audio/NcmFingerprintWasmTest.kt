@@ -1,6 +1,5 @@
 package app.hypochlorite.audio
 
-import java.io.File
 import kotlin.math.PI
 import kotlin.math.sin
 import kotlinx.coroutines.runBlocking
@@ -10,18 +9,12 @@ import org.junit.Test
 
 /**
  * 指纹层的字节对齐测试：官方 glue（Node）跑出的 288 字节是基准，
- * Chicory 宿主必须产出**逐字节相同**的指纹。
+ * Chicory AOT 宿主必须产出**逐字节相同**的指纹。
  *
- * 需要私有的 `afp.query.wasm` 在 `app/src/main/assets/netease/` 下（见 memory：
- * 那份资源有意不进仓库），缺资源时整个测试跳过而不是失败。
+ * 需要构建期 AOT 成功（`compileFingerprintWasmAot`，依赖 assets 里的 `afp.query.wasm`）。
+ * 缺资源时整个测试跳过而不是失败。
  */
 class NcmFingerprintWasmTest {
-
-    private fun wasmBytes(): ByteArray? {
-        val asset = File("src/main/assets/netease/afp.query.wasm")
-        if (!asset.isFile) return null
-        return asset.readBytes()
-    }
 
     /** 与 golden 采集时同一份确定性音频：3 秒 @8kHz 单声道，三个音调叠加。 */
     private fun goldenPcm(): FloatArray {
@@ -35,18 +28,16 @@ class NcmFingerprintWasmTest {
     }
 
     @Test
-    fun `Chicory 宿主产出的指纹与官方 glue 逐字节相同`() = runBlocking {
-        val bytes = wasmBytes()
-        assumeTrue("缺少 afp.query.wasm，跳过指纹字节对齐验证", bytes != null)
-        val gen = NcmFingerprintWasm(bytes!!)
+    fun `Chicory AOT 宿主产出的指纹与官方 glue 逐字节相同`() = runBlocking {
+        assumeTrue("指纹 AOT 不可用，跳过字节对齐验证", NcmFingerprintWasm.isAvailable())
+        val gen = NcmFingerprintWasm()
         assertEquals(GOLDEN_FP_BASE64, gen.generate(goldenPcm()))
     }
 
     @Test
     fun `同一段音频的指纹可复现，换一段就不同`() = runBlocking {
-        val bytes = wasmBytes()
-        assumeTrue("缺少 afp.query.wasm，跳过指纹字节对齐验证", bytes != null)
-        val gen = NcmFingerprintWasm(bytes!!)
+        assumeTrue("指纹 AOT 不可用，跳过字节对齐验证", NcmFingerprintWasm.isAvailable())
+        val gen = NcmFingerprintWasm()
         val pcm = goldenPcm()
         val n = pcm.size
         val other = FloatArray(n) { i ->
