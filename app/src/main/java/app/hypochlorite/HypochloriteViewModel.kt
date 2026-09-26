@@ -658,7 +658,7 @@ class HypochloriteViewModel(application: Application) : AndroidViewModel(applica
         val hit = _ui.value.audioMatch.hit ?: return
         playSong(hit)
         // toast 由引擎发，collector 再收回 _ui —— 别在这里直接写 _ui.audioMatch，会被下一次 collect 覆盖
-        app.audioMatch.notify("已接管播放")
+        app.audioMatch.notify(hit.line())
         viewModelScope.launch {
             withTimeoutOrNull(NOW_PLAYING_WAIT_MS) { app.player.state.first { it.current?.id == hit.id } }
             openNowPlaying()

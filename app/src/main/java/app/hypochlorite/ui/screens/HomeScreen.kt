@@ -59,7 +59,6 @@ import app.hypochlorite.ui.TogetherIcon
 import app.hypochlorite.ui.slice
 import app.hypochlorite.ui.homeHeaderUi
 import app.hypochlorite.ui.homeLibraryUi
-import app.hypochlorite.ui.clickableNoRipple
 import app.hypochlorite.ui.sections.MiniBar
 import app.hypochlorite.ui.theme.LocalHypochloriteColors
 import kotlinx.coroutines.delay
@@ -86,13 +85,6 @@ internal fun HomeScreen(uiState: State<HomeState>, vm: HypochloriteViewModel) {
         keyboardController?.hide()
     }
 
-    val toggleSearch: () -> Unit = {
-        if (searchOpen) {
-            closeSearch()
-        } else {
-            vm.setSearchOpen(true)
-        }
-    }
 
     LaunchedEffect(searchOpen) {
         if (!searchOpen) {
@@ -117,7 +109,6 @@ internal fun HomeScreen(uiState: State<HomeState>, vm: HypochloriteViewModel) {
         Header(
             uiState = uiState,
             vm = vm,
-            onToggleSearch = toggleSearch,
             onCloseSearch = closeSearch,
             searchFocusRequester = searchFocusRequester,
             onSearchFocus = { searchFocused = it },
@@ -199,7 +190,6 @@ private fun HomeLibrary(uiState: State<HomeState>, vm: HypochloriteViewModel, pa
 private fun Header(
     uiState: State<HomeState>,
     vm: HypochloriteViewModel,
-    onToggleSearch: () -> Unit,
     onCloseSearch: () -> Unit,
     searchFocusRequester: FocusRequester,
     onSearchFocus: (Boolean) -> Unit,
@@ -218,7 +208,7 @@ private fun Header(
             ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 左侧：关闭时 Logo+标题；打开时返回键。与 ExpandingSearch 同生命周期，避免整页硬切。
+        // 左侧：搜索打开时返回键；关闭时不再放字标/Logo，SEARCH chip 自带入口。
         AnimatedContent(
             targetState = state.searchOpen,
             transitionSpec = {
@@ -229,15 +219,6 @@ private fun Header(
             if (open) {
                 MiniIconButton(onClick = onCloseSearch) {
                     BackArrowIcon(size = 18.dp)
-                }
-            } else {
-                Row(
-                    Modifier
-                        .clickableNoRipple { onToggleSearch() }
-                        .padding(vertical = 4.dp, horizontal = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    MonoText("Hypochlorite", bold = true, size = 22)
                 }
             }
         }
@@ -261,7 +242,7 @@ private fun Header(
             modifier = Modifier
                 .weight(1f)
                 .padding(
-                    start = if (state.searchOpen) 0.dp else 12.dp,
+                    start = 0.dp,
                     end = if (state.searchOpen) 2.dp else 6.dp,
                 ),
         )

@@ -1673,6 +1673,9 @@ fun ProgressLine(
 ) {
     var dragging by remember { mutableStateOf(false) }
     var dragP by remember { mutableFloatStateOf(0f) }
+    // 松手/点选落针时递增：ScrambleTimeText 只盯 triggerKey，光靠 enabled 翻转
+    // 在 triggerSeq==0（从没切过歌）时不会播；同一首歌反复拖也要每次都滚字。
+    var seekTrigger by remember { mutableIntStateOf(0) }
     val live = progress.coerceIn(0f, 1f)
 
     // 走针位置用 Animatable：切歌时目标值会从旧进度砸到 0，这时给一段更长的「抽气」时间，
@@ -1699,10 +1702,11 @@ fun ProgressLine(
 
     Column(modifier.fillMaxWidth()) {
         if (!compact && showTime) {
+            val timeTrigger = "${trackKey ?: ""}#$seekTrigger"
             Row(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
                 ScrambleTimeText(
                     text = fmtTime(posShown),
-                    triggerKey = trackKey,
+                    triggerKey = timeTrigger,
                     enabled = !dragging,
                     size = 12,
                     muted = true,
@@ -1712,7 +1716,7 @@ fun ProgressLine(
                 // 拖拽时用拖到的位置算，松手前就是「若在这里落针还剩多久」。
                 ScrambleTimeText(
                     text = "-" + fmtTime((durationMs - posShown).coerceAtLeast(0L)),
-                    triggerKey = if (scrambleDurationLabel()) trackKey else null,
+                    triggerKey = if (scrambleDurationLabel()) timeTrigger else null,
                     enabled = !dragging && scrambleDurationLabel(),
                     size = 12,
                     muted = true,
@@ -1739,6 +1743,7 @@ fun ProgressLine(
                                     if (!change.pressed) {
                                         onSeek(dragP)
                                         dragging = false
+                                        seekTrigger++
                                         break
                                     }
                                     dragP = (change.position.x / w).coerceIn(0f, 1f)
@@ -1763,10 +1768,11 @@ fun ProgressLine(
             drawRect(colors.text, topLeft = Offset(tx, y - thumb / 2f), size = Size(thumb, thumb))
         }
         if (compact && showTime) {
+            val timeTrigger = "${trackKey ?: ""}#$seekTrigger"
             Row(Modifier.fillMaxWidth().padding(top = 2.dp)) {
                 ScrambleTimeText(
                     text = fmtTime(posShown),
-                    triggerKey = trackKey,
+                    triggerKey = timeTrigger,
                     enabled = !dragging,
                     size = 11,
                     muted = true,
@@ -1774,7 +1780,7 @@ fun ProgressLine(
                 Spacer(Modifier.weight(1f))
                 ScrambleTimeText(
                     text = fmtTime(durationMs),
-                    triggerKey = if (scrambleDurationLabel()) trackKey else null,
+                    triggerKey = if (scrambleDurationLabel()) timeTrigger else null,
                     enabled = !dragging && scrambleDurationLabel(),
                     size = 11,
                     muted = true,
@@ -2200,11 +2206,13 @@ fun RadarIcon(
         val w = this.size.width
         val h = this.size.height
         val sw = 1.5.dp.toPx()
-        val center = Offset(w * 0.28f, h * 0.72f)
-        drawCircle(color = c, radius = w * 0.08f, center = center)
+        // 发射点略偏左下，弧朝右上张开；整体包围盒对中到画布中心，避免在
+        // MiniIconButton 里看起来沉在一角。
+        val center = Offset(w * 0.40f, h * 0.60f)
+        drawCircle(color = c, radius = w * 0.075f, center = center)
         // 两道弧从同一点向外扩，开口朝右上方（像声波散出）
-        val r1 = w * 0.30f
-        val r2 = w * 0.58f
+        val r1 = w * 0.26f
+        val r2 = w * 0.48f
         drawArc(
             color = c.copy(alpha = 0.85f),
             startAngle = -60f,
